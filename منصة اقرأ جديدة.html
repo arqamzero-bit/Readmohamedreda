@@ -1106,16 +1106,17 @@
         };
 
         // ================================================================
-        // 2. FIREBASE CONFIG & SYNC (ثابت ومعدّل)
+        // 2. FIREBASE CONFIG & SYNC - قاعدة البيانات الجديدة
         // ================================================================
         const firebaseConfig = {
-            apiKey: "AIzaSyCTWBhTDqPdwfzzOxODFFssmaKvB7R_wP8",
-            authDomain: "smart-reading-by-mohamed.firebaseapp.com",
-            projectId: "smart-reading-by-mohamed",
-            storageBucket: "smart-reading-by-mohamed.firebasestorage.app",
-            messagingSenderId: "668252782415",
-            appId: "1:668252782415:web:b82acef6d99c42a9028f3a",
-            measurementId: "G-FYMVTDDE8E"
+            apiKey: "AIzaSyA-ibqutaDJ1-xTBGIqwJYHqRFFxc_fbPI",
+            authDomain: "readmohamedreda-67dc8.firebaseapp.com",
+            databaseURL: "https://readmohamedreda-67dc8-default-rtdb.firebaseio.com",
+            projectId: "readmohamedreda-67dc8",
+            storageBucket: "readmohamedreda-67dc8.firebasestorage.app",
+            messagingSenderId: "219334063933",
+            appId: "1:219334063933:web:cda16810380688f879f754",
+            measurementId: "G-BF52QE9H4K"
         };
 
         let firebaseReady = false;
@@ -1127,154 +1128,314 @@
 
         function initFirebase() {
             try {
-                if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+                if (typeof firebase === 'undefined') {
+                    console.error('❌ Firebase SDK غير محمّل');
+                    updateSyncStatus(false);
+                    return;
+                }
+                
+                if (!firebase.apps.length) {
+                    firebase.initializeApp(firebaseConfig);
+                    console.log('✅ Firebase initialized with new config');
+                }
+                
                 auth = firebase.auth();
                 db = firebase.firestore();
-                db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
+                
+                db.enablePersistence({ synchronizeTabs: true })
+                    .catch((err) => {
+                        console.warn('⚠️ Firestore persistence error:', err);
+                    });
+                
                 auth.onAuthStateChanged((user) => {
-                    if (user) { currentUser = user;
+                    if (user) {
+                        currentUser = user;
                         firebaseReady = true;
-                        updateSyncStatus(true); if (!listenersStarted) { startFirebaseListeners();
-                            listenersStarted = true; } console.log('✅ Firebase ready');
-                        if (!window._cloudLoaded) { window._cloudLoaded = true;
-                            loadFromCloud(); } } else { signInAnonymously(); }
+                        updateSyncStatus(true);
+                        if (!listenersStarted) {
+                            startFirebaseListeners();
+                            listenersStarted = true;
+                        }
+                        console.log('✅ Firebase ready - User:', user.uid);
+                        if (!window._cloudLoaded) {
+                            window._cloudLoaded = true;
+                            loadFromCloud();
+                        }
+                    } else {
+                        signInAnonymously();
+                    }
                 });
-                window.addEventListener('online', () => { if (db) { db.enableNetwork().then(() => updateSyncStatus(
-                        true)).catch(() => updateSyncStatus(false)); } });
+                
+                window.addEventListener('online', () => {
+                    if (db) {
+                        db.enableNetwork()
+                            .then(() => updateSyncStatus(true))
+                            .catch(() => updateSyncStatus(false));
+                    }
+                });
+                
                 window.addEventListener('offline', () => updateSyncStatus(false));
-                setInterval(() => { if (navigator.onLine && db && firebaseReady) { db.enableNetwork().catch(
-                        () => {}); } }, 15000);
+                
+                setInterval(() => {
+                    if (navigator.onLine && db && firebaseReady) {
+                        db.enableNetwork().catch(() => {});
+                    }
+                }, 15000);
+                
                 window.__db = db;
                 window.__auth = auth;
-            } catch (e) { console.error('❌ Firebase init error:', e);
+                
+            } catch (e) {
+                console.error('❌ Firebase init error:', e);
                 firebaseReady = false;
-                updateSyncStatus(false); }
+                updateSyncStatus(false);
+            }
         }
 
         function signInAnonymously(retries = 5) {
             if (!auth) return;
-            auth.signInAnonymously().then((userCred) => {
-                currentUser = userCred.user;
-                firebaseReady = true;
-                updateSyncStatus(true);
-                if (!listenersStarted) { startFirebaseListeners();
-                    listenersStarted = true; }
-                if (!window._cloudLoaded) { window._cloudLoaded = true;
-                    loadFromCloud(); }
-            }).catch((err) => {
-                if (retries > 0 && (err.code === 'auth/network-request-failed' || err.code ===
-                        'auth/internal-error')) { setTimeout(() => signInAnonymously(retries - 1), 3000); } else {
-                    firebaseReady = false;
-                    updateSyncStatus(false); }
-            });
+            
+            auth.signInAnonymously()
+                .then((userCred) => {
+                    currentUser = userCred.user;
+                    firebaseReady = true;
+                    updateSyncStatus(true);
+                    if (!listenersStarted) {
+                        startFirebaseListeners();
+                        listenersStarted = true;
+                    }
+                    if (!window._cloudLoaded) {
+                        window._cloudLoaded = true;
+                        loadFromCloud();
+                    }
+                    console.log('✅ Signed in anonymously:', currentUser.uid);
+                })
+                .catch((err) => {
+                    console.error('❌ Sign in error:', err);
+                    if (retries > 0 && (err.code === 'auth/network-request-failed' || err.code === 'auth/internal-error')) {
+                        setTimeout(() => signInAnonymously(retries - 1), 3000);
+                    } else {
+                        firebaseReady = false;
+                        updateSyncStatus(false);
+                    }
+                });
         }
 
         function updateSyncStatus(online) {
             const el = document.getElementById('syncStatus');
             if (!el) return;
-            if (online && navigator.onLine) { el.className = 'sync-status online';
-                el.innerHTML = '☁️ متصل'; } else { el.className = 'sync-status offline';
-                el.innerHTML = '📶 غير متصل (مخزّن محلياً)'; }
+            
+            if (online && navigator.onLine && firebaseReady) {
+                el.className = 'sync-status online';
+                el.innerHTML = '☁️ متصل';
+            } else {
+                el.className = 'sync-status offline';
+                el.innerHTML = '📶 غير متصل (مخزّن محلياً)';
+            }
         }
 
         function startFirebaseListeners() {
             if (!firebaseReady || listenersStarted || !db) return;
+            
             listenersStarted = true;
-            db.collection('students').onSnapshot((snapshot) => {
-                if (isSyncing || !snapshot) return;
-                snapshot.docChanges().forEach((change) => {
-                    const doc = change.doc,
-                        id = doc.id,
-                        data = doc.data();
-                    if (!data) return;
-                    if (!data.name || !data.grade || !data.className) return;
-                    if (change.type === 'added' || change.type === 'modified') {
-                        const idx = appData.students.findIndex(s => s.id === id);
-                        if (idx !== -1) {
-                            Object.keys(data).forEach(k => { if (k !== 'reports' && k !==
-                                    'readingAttempts') appData.students[idx][k] = data[k]; });
-                            if (data.hasRead !== undefined) appData.students[idx].hasRead = data.hasRead;
-                        } else {
-                            const ns = { id, ...data, hasRead: data.hasRead || false };
-                            if (!ns.reports) ns.reports = [];
-                            if (!ns.readingAttempts) ns.readingAttempts = [];
-                            appData.students.push(ns);
+            console.log('🔄 Starting Firebase listeners...');
+            
+            db.collection('students')
+                .onSnapshot((snapshot) => {
+                    if (isSyncing || !snapshot) return;
+                    
+                    snapshot.docChanges().forEach((change) => {
+                        const doc = change.doc;
+                        const id = doc.id;
+                        const data = doc.data();
+                        
+                        if (!data) return;
+                        if (!data.name || !data.grade || !data.className) {
+                            console.warn('⚠️ Skipping incomplete student data:', data);
+                            return;
                         }
-                    } else if (change.type === 'removed') {
-                        appData.students = appData.students.filter(s => s.id !== id);
-                    }
+                        
+                        if (change.type === 'added' || change.type === 'modified') {
+                            const idx = appData.students.findIndex(s => s.id === id);
+                            
+                            if (idx !== -1) {
+                                Object.keys(data).forEach(k => {
+                                    if (k !== 'reports' && k !== 'readingAttempts') {
+                                        appData.students[idx][k] = data[k];
+                                    }
+                                });
+                                if (data.hasRead !== undefined) {
+                                    appData.students[idx].hasRead = data.hasRead;
+                                }
+                            } else {
+                                const ns = {
+                                    id: id,
+                                    ...data,
+                                    hasRead: data.hasRead || false
+                                };
+                                if (!ns.reports) ns.reports = [];
+                                if (!ns.readingAttempts) ns.readingAttempts = [];
+                                appData.students.push(ns);
+                            }
+                        } else if (change.type === 'removed') {
+                            appData.students = appData.students.filter(s => s.id !== id);
+                        }
+                    });
+                    
+                    saveAppDataLocally();
+                    renderStudentsTable();
+                    renderBulbsForCurrentClass();
+                    renderManageView();
+                    loadFilteredStudents();
+                    updateHomeStats();
+                    localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
+                    updateSyncStatus(true);
+                    
+                }, (error) => {
+                    console.warn('⚠️ Firestore listener error:', error);
+                    updateSyncStatus(false);
+                    
+                    setTimeout(() => {
+                        if (db && navigator.onLine) {
+                            db.enableNetwork()
+                                .then(() => updateSyncStatus(true))
+                                .catch(() => {});
+                        }
+                    }, 5000);
                 });
-                saveAppDataLocally();
-                renderStudentsTable();
-                renderBulbsForCurrentClass();
-                renderManageView();
-                loadFilteredStudents();
-                updateHomeStats();
-                localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
-                updateSyncStatus(true);
-            }, (error) => {
-                console.warn('⚠️ Firestore listener error:', error);
-                updateSyncStatus(false);
-                setTimeout(() => { if (db && navigator.onLine) { db.enableNetwork().then(() => updateSyncStatus(
-                        true)).catch(() => {}); } }, 5000);
-            });
         }
 
         function saveToCloud(collection, docId, data, merge = true) {
-            if (!firebaseReady || !db || !currentUser || !navigator.onLine) return Promise.reject('offline');
+            if (!firebaseReady || !db || !currentUser || !navigator.onLine) {
+                console.warn('⚠️ Cannot save to cloud - offline or not ready');
+                return Promise.reject('offline');
+            }
+            
             if (!data.name || !data.grade || !data.className) {
-                console.warn('تجاهل حفظ طالب غير مكتمل:', data);
+                console.warn('⚠️ Skipping student with incomplete data:', data);
                 return Promise.reject('بيانات ناقصة');
             }
-            return db.collection(collection).doc(docId).set(data, { merge }).catch((err) => { return Promise.reject(
-                    err); });
+            
+            return db.collection(collection)
+                .doc(docId)
+                .set(data, { merge })
+                .catch((err) => {
+                    console.error('❌ Error saving to cloud:', err);
+                    return Promise.reject(err);
+                });
         }
 
         async function loadFromCloud() {
-            if (!firebaseReady || !db || !navigator.onLine) return;
+            if (!firebaseReady || !db || !navigator.onLine) {
+                console.warn('⚠️ Cannot load from cloud - offline or not ready');
+                return;
+            }
+            
             try {
+                console.log('🔄 Loading data from cloud...');
                 const snapshot = await db.collection('students').get();
+                
                 snapshot.forEach(doc => {
-                    const id = doc.id,
-                        data = doc.data();
-                    if (!data.name || !data.grade || !data.className) return;
+                    const id = doc.id;
+                    const data = doc.data();
+                    
+                    if (!data.name || !data.grade || !data.className) {
+                        console.warn('⚠️ Skipping incomplete student data:', data);
+                        return;
+                    }
+                    
                     const idx = appData.students.findIndex(s => s.id === id);
-                    if (idx !== -1) { Object.keys(data).forEach(k => { if (k !== 'reports' && k !==
-                                'readingAttempts') appData.students[idx][k] = data[k]; }); if (data
-                            .hasRead !== undefined) appData.students[idx].hasRead = data.hasRead; } else {
-                        const ns = { id, ...data, hasRead: data.hasRead || false }; if (!ns.reports) ns
-                            .reports = []; if (!ns.readingAttempts) ns.readingAttempts = [];
-                        appData.students.push(ns); }
+                    
+                    if (idx !== -1) {
+                        Object.keys(data).forEach(k => {
+                            if (k !== 'reports' && k !== 'readingAttempts') {
+                                appData.students[idx][k] = data[k];
+                            }
+                        });
+                        if (data.hasRead !== undefined) {
+                            appData.students[idx].hasRead = data.hasRead;
+                        }
+                    } else {
+                        const ns = {
+                            id: id,
+                            ...data,
+                            hasRead: data.hasRead || false
+                        };
+                        if (!ns.reports) ns.reports = [];
+                        if (!ns.readingAttempts) ns.readingAttempts = [];
+                        appData.students.push(ns);
+                    }
                 });
+                
                 localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
+                
                 renderStudentsTable();
                 renderBulbsForCurrentClass();
                 renderManageView();
                 loadFilteredStudents();
                 updateHomeStats();
                 updateSyncStatus(true);
-            } catch (e) { console.error('❌ loadFromCloud error:', e);
-                updateSyncStatus(false); }
+                
+                console.log('✅ Data loaded from cloud successfully');
+                
+            } catch (e) {
+                console.error('❌ loadFromCloud error:', e);
+                updateSyncStatus(false);
+            }
         }
 
         function syncWithCloud() {
-            if (!firebaseReady || !db || !navigator.onLine) { alert('⚠️ لا يوجد اتصال بالسحابة.'); return; }
-            if (appData.students.length === 0) { alert('⚠️ لا توجد بيانات لحفظها'); return; }
+            if (!firebaseReady || !db || !navigator.onLine) {
+                alert('⚠️ لا يوجد اتصال بالسحابة. تأكد من اتصالك بالإنترنت.');
+                return;
+            }
+            
+            if (appData.students.length === 0) {
+                alert('⚠️ لا توجد بيانات لحفظها');
+                return;
+            }
+            
             isSyncing = true;
             const promises = [];
+            let savedCount = 0;
+            
             appData.students.forEach(s => {
                 if (!s.name || !s.grade || !s.className) {
-                    console.warn('تخطي طالب غير مكتمل:', s);
+                    console.warn('⚠️ Skipping student with incomplete data:', s);
                     return;
                 }
-                const d = { name: s.name, grade: s.grade, className: s.className, code: s.code || '—',
-                    hasRead: s.hasRead || false, updatedAt: new Date().toISOString() };
-                promises.push(saveToCloud('students', s.id, d));
+                
+                const d = {
+                    name: s.name,
+                    grade: s.grade,
+                    className: s.className,
+                    code: s.code || '—',
+                    hasRead: s.hasRead || false,
+                    updatedAt: new Date().toISOString()
+                };
+                
+                promises.push(
+                    saveToCloud('students', s.id, d)
+                        .then(() => {
+                            savedCount++;
+                            console.log('✅ Saved student:', s.name);
+                        })
+                        .catch((err) => {
+                            console.error('❌ Failed to save student:', s.name, err);
+                        })
+                );
             });
-            Promise.all(promises).then(() => { isSyncing = false;
-                alert('✅ تم الحفظ في السحابة');
-                loadFromCloud(); }).catch(() => { isSyncing = false;
-                alert('⚠️ حدث خطأ'); });
+            
+            Promise.all(promises)
+                .then(() => {
+                    isSyncing = false;
+                    alert(`✅ تم الحفظ في السحابة (${savedCount} طالب)`);
+                    loadFromCloud();
+                })
+                .catch(() => {
+                    isSyncing = false;
+                    alert('⚠️ حدث خطأ أثناء الحفظ، حاول مرة أخرى');
+                });
         }
 
         // ================================================================
@@ -1891,7 +2052,7 @@
         }
 
         // ================================================================
-        // 11. ⭐⭐ الميكروفون — مع دعم الجوال وإصلاح صلاحيات Android ⭐⭐
+        // 11. ⭐⭐ الميكروفون — إصلاح شامل للتوقف والتكرار ⭐⭐
         // ================================================================
         let recognition = null;
         let mediaStream = null;
@@ -1907,93 +2068,267 @@
         let sessionActive = false;
         let permissionRequested = false;
         let permissionCheckDone = false;
+        let isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        let micPermissionStatus = 'unknown';
+        let speechRecognitionSupported = false;
+        let isFirstStart = true;
+        let startAttempts = 0;
+        let lastFinalText = '';
+        let recognitionActive = false;
+        let recognitionRestarting = false;
+        let lastResultText = '';
+        let resultCounter = 0;
+        let finalTranscriptParts = [];
+        let isEndingSession = false;
 
-        // ===== دوال جديدة للتحقق من صلاحية الميكروفون =====
+        // ===== التحقق من دعم التعرف الصوتي =====
+        function checkSpeechRecognitionSupport() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (SpeechRecognition) {
+                speechRecognitionSupported = true;
+                return true;
+            } else {
+                speechRecognitionSupported = false;
+                return false;
+            }
+        }
+
+        // ===== التحقق من صلاحية الميكروفون المتقدمة =====
         async function checkMicrophonePermission() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { 
+                        echoCancellation: true, 
+                        noiseSuppression: true, 
+                        autoGainControl: true 
+                    } 
+                });
                 stream.getTracks().forEach(track => track.stop());
+                micPermissionStatus = 'granted';
                 return { granted: true, status: 'granted' };
             } catch (err) {
+                console.warn('Mic permission check error:', err.name);
                 if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
                     if (navigator.permissions && navigator.permissions.query) {
                         try {
                             const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
                             if (permissionStatus.state === 'denied') {
-                                return { granted: false, status: 'denied' };
+                                micPermissionStatus = 'denied';
+                                return { granted: false, status: 'permanently denied' };
                             } else if (permissionStatus.state === 'prompt') {
+                                micPermissionStatus = 'prompt';
                                 return { granted: false, status: 'prompt' };
                             } else {
+                                micPermissionStatus = 'unknown';
                                 return { granted: false, status: 'unknown' };
                             }
                         } catch (permErr) {
+                            micPermissionStatus = 'unknown';
                             return { granted: false, status: 'unknown' };
                         }
                     }
+                    micPermissionStatus = 'denied';
                     return { granted: false, status: 'denied' };
                 } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                    micPermissionStatus = 'not-available';
                     return { granted: false, status: 'not-available' };
+                } else if (err.name === 'SecurityError') {
+                    micPermissionStatus = 'security';
+                    return { granted: false, status: 'security' };
+                } else {
+                    micPermissionStatus = 'error';
+                    return { granted: false, status: 'error', message: err.message };
                 }
-                return { granted: false, status: 'error' };
             }
         }
 
-        function showMicrophonePermissionAlert(status, errorMsg = '') {
+        // ===== عرض رسائل تنبيه =====
+        function showMicrophoneAlert(status, errorMsg = '') {
             let message = '';
             
-            if (status === 'denied' || status === 'permanently denied') {
-                message = `🔴 لم يتم منح صلاحية الميكروفون.\n\n` +
-                          `لتفعيل الميكروفون على هاتفك:\n\n` +
-                          `📱 على Android (Chrome):\n` +
-                          `1. اضغط على 🔒 (القفل) بجانب الرابط\n` +
-                          `2. اختر "إعدادات الموقع" (Site Settings)\n` +
-                          `3. ابحث عن "الميكروفون" واختر "السماح" (Allow)\n` +
-                          `4. أعد تحميل الصفحة (Refresh)\n\n` +
-                          `📱 على iPhone (Safari):\n` +
-                          `1. اذهب إلى إعدادات الجهاز > Safari\n` +
-                          `2. ابحث عن "الميكروفون" واختر "السماح"\n` +
-                          `3. أعد تحميل الصفحة\n\n` +
-                          `🔄 بعد التفعيل، اضغط على زر "بدء القراءة" مرة أخرى.`;
+            if (status === 'permanently denied' || status === 'denied') {
+                message = `🔴 لم يتم منح صلاحية الميكروفون بشكل دائم.
+
+📱 لتفعيل الميكروفون على Android (Chrome):
+
+الطريقة الأولى (الأسرع):
+1. اضغط على 🔒 أو 🔓 بجانب الرابط في شريط العنوان
+2. اختر "إعدادات الموقع" (Site Settings)
+3. ابحث عن "الميكروفون" واختر "السماح" (Allow)
+4. أعد تحميل الصفحة (Refresh)
+
+الطريقة الثانية:
+1. اذهب إلى إعدادات الهاتف > التطبيقات > Chrome
+2. اختر "الصلاحيات" (Permissions)
+3. اضغط على "الميكروفون" واختر "السماح" (Allow)
+
+الطريقة الثالثة (حل بديل):
+- استخدم متصفح Samsung Internet أو Firefox
+
+🔄 بعد التفعيل، اضغط على زر "بدء القراءة" مرة أخرى.`;
             } else if (status === 'prompt') {
-                message = `🎙️ يرجى السماح باستخدام الميكروفون.\n\n` +
-                          `عند ظهور النافذة المنبثقة، اختر "سماح" (Allow).\n\n` +
-                          `إذا لم تظهر النافذة:\n` +
-                          `• تأكد من أن الموقع يعمل عبر HTTPS\n` +
-                          `• اضغط على زر "بدء القراءة" مرة أخرى\n` +
-                          `• تأكد من عدم وجود مانع إعلانات`;
+                message = `🎙️ يرجى السماح باستخدام الميكروفون.
+
+عند ظهور النافذة المنبثقة، اختر "سماح" (Allow).
+
+❓ إذا لم تظهر النافذة:
+• اضغط على زر "بدء القراءة" مرة أخرى
+• تأكد من عدم وجود مانع إعلانات
+• تأكد من أن الموقع يعمل عبر HTTPS`;
             } else if (status === 'not-available' || status === 'device-not-found') {
-                message = `🔴 لم يتم العثور على ميكروفون في جهازك.\n\n` +
-                          `تأكد من:\n` +
-                          `- وجود ميكروفون متصل بالجهاز\n` +
-                          `- عدم وجود تطبيق آخر يستخدم الميكروفون\n` +
-                          `- إعادة تشغيل المتصفح\n\n` +
-                          `إذا كان الجهاز يحتوي على ميكروفون مدمج، حاول إعادة تحميل الصفحة.`;
+                message = `🔴 لم يتم العثور على ميكروفون في جهازك.
+
+تأكد من:
+• وجود ميكروفون متصل بالجهاز
+• عدم وجود تطبيق آخر يستخدم الميكروفون
+• إعادة تشغيل المتصفح`;
             } else if (status === 'not-supported') {
-                message = `🔴 متصفحك لا يدعم الميكروفون.\n\n` +
-                          `استخدم أحد المتصفحات التالية:\n` +
-                          `- Google Chrome (الإصدار 70 أو أحدث)\n` +
-                          `- Microsoft Edge (الإصدار 79 أو أحدث)\n` +
-                          `- Safari (الإصدار 14.1 أو أحدث)\n` +
-                          `- Samsung Internet (الإصدار 14 أو أحدث)`;
+                message = `🔴 متصفحك لا يدعم التعرف الصوتي.
+
+استخدم أحد المتصفحات التالية:
+• Google Chrome (الإصدار 70 أو أحدث)
+• Samsung Internet (الإصدار 14 أو أحدث)
+• Microsoft Edge (الإصدار 79 أو أحدث)`;
+            } else if (status === 'security') {
+                message = `🔒 يتطلب الميكروفون اتصالاً آمناً (HTTPS).
+
+⚠️ الموقع يعمل عبر HTTP، وهذا غير آمن للميكروفون.
+
+🔄 الحل:
+• استخدم الرابط: https://arqamzero-bit.github.io/...`;
             } else if (status === 'error') {
-                message = `❌ حدث خطأ أثناء محاولة الوصول للميكروفون:\n\n${errorMsg}\n\n` +
-                          `حاول:\n` +
-                          `- إعادة تحميل الصفحة\n` +
-                          `- إغلاق التطبيقات التي تستخدم الميكروفون\n` +
-                          `- إعادة تشغيل الجهاز`;
+                message = `❌ حدث خطأ في الميكروفون:\n\n${errorMsg}\n\nحاول:\n• إعادة تحميل الصفحة\n• إغلاق التطبيقات التي تستخدم الميكروفون\n• إعادة تشغيل الجهاز`;
             } else {
-                message = `⚠️ يرجى السماح باستخدام الميكروفون.\n\n` +
-                          `عند ظهور نافذة صلاحية المتصفح، اختر "السماح" (Allow).\n\n` +
-                          `إذا لم تظهر النافذة، تأكد من:\n` +
-                          `- استخدام HTTPS (اتصال آمن)\n` +
-                          `- عدم وجود مانع إعلانات يعطل الميكروفون\n` +
-                          `- إعادة تحميل الصفحة والمحاولة مرة أخرى`;
+                message = `⚠️ يرجى السماح باستخدام الميكروفون.
+
+عند ظهور نافذة صلاحية المتصفح، اختر "سماح" (Allow).
+
+💡 تأكد من:
+• استخدام HTTPS (اتصال آمن)
+• عدم وجود مانع إعلانات
+• إعادة تحميل الصفحة والمحاولة مرة أخرى`;
             }
             
             alert(message);
         }
 
-        // ===== دالة startReadingSession المعدلة لدعم الجوال =====
+        // ===== دالة تنظيف النص من التكرار =====
+        function cleanRepeatedText(text) {
+            if (!text || text.trim().length === 0) return '';
+            
+            let words = text.split(/\s+/).filter(w => w.length > 0);
+            if (words.length === 0) return '';
+            
+            let uniqueWords = [];
+            let prevWord = '';
+            for (let i = 0; i < words.length; i++) {
+                const currentWord = words[i];
+                if (currentWord !== prevWord) {
+                    uniqueWords.push(currentWord);
+                    prevWord = currentWord;
+                }
+            }
+            
+            return uniqueWords.join(' ');
+        }
+
+        // ===== دالة للتحقق من تكرار النص =====
+        function isDuplicateText(newText, existingText) {
+            if (!newText || !existingText) return false;
+            
+            const cleanNew = newText.trim();
+            const cleanExisting = existingText.trim();
+            
+            if (cleanNew.length === 0 || cleanExisting.length === 0) return false;
+            
+            if (cleanExisting.includes(cleanNew) && cleanNew.length < cleanExisting.length) {
+                return true;
+            }
+            
+            const existingWords = cleanExisting.split(/\s+/);
+            const newWords = cleanNew.split(/\s+/);
+            
+            if (newWords.length === 0 || existingWords.length === 0) return false;
+            
+            const lastWords = existingWords.slice(-newWords.length);
+            if (lastWords.length === newWords.length) {
+                let allMatch = true;
+                for (let i = 0; i < newWords.length; i++) {
+                    if (lastWords[i] !== newWords[i]) {
+                        allMatch = false;
+                        break;
+                    }
+                }
+                if (allMatch) return true;
+            }
+            
+            return false;
+        }
+
+        // ===== دالة التنظيف النهائي =====
+        function cleanFinalTranscriptForAnalysis(transcript) {
+            if (!transcript || transcript.trim().length === 0) return '';
+            
+            let cleaned = cleanRepeatedText(transcript);
+            
+            let words = cleaned.split(/\s+/).filter(w => w.length > 0);
+            if (words.length === 0) return '';
+            
+            let finalWords = [];
+            for (let i = 0; i < words.length; i++) {
+                const word = words[i];
+                if (word.length > 3) {
+                    const halfLength = Math.floor(word.length / 2);
+                    const firstHalf = word.substring(0, halfLength);
+                    const secondHalf = word.substring(halfLength);
+                    if (firstHalf === secondHalf && word.length % 2 === 0) {
+                        finalWords.push(firstHalf);
+                        continue;
+                    }
+                }
+                finalWords.push(word);
+            }
+            
+            let uniqueWords = [];
+            let prevWord = '';
+            for (let i = 0; i < finalWords.length; i++) {
+                if (finalWords[i] !== prevWord) {
+                    uniqueWords.push(finalWords[i]);
+                    prevWord = finalWords[i];
+                }
+            }
+            
+            return uniqueWords.join(' ');
+        }
+
+        // ===== تصفية النصوص غير الصحيحة =====
+        function filterInvalidTranscript(text) {
+            if (!text || text.trim().length === 0) return '';
+            
+            const invalidPhrases = [
+                'الحمد', 'توصيات', 'حالة الطلاب', 'الرئيسية', 'طلاب', 'الفصل',
+                'اختر الطالب', 'اختر النص', 'بدء القراءة', 'إيقاف', 'عرض البطاقة',
+                'الميكروفون', 'الصوت', 'التعرف', 'الاستماع', 'تحديث', 'حفظ',
+                'منصة', 'قراءتي', 'الذكية', 'بطاقة', 'التقييم', 'القرائي',
+                'المعلم', 'الطلاب', 'الفصول', 'الإعدادات', 'استيراد', 'تصدير'
+            ];
+            
+            let cleanedText = text;
+            for (let phrase of invalidPhrases) {
+                const regex = new RegExp(phrase, 'gi');
+                cleanedText = cleanedText.replace(regex, '');
+            }
+            
+            cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+            
+            if (cleanedText.length === 0 && text.length > 3) {
+                return text.trim();
+            }
+            
+            return cleanedText;
+        }
+
+        // ===== دالة startReadingSession المعدلة بالكامل =====
         async function startReadingSession() {
             const studentId = document.getElementById('eval-student-select').value;
             const textId = document.getElementById('eval-text-select').value;
@@ -2002,85 +2337,120 @@
                 return; 
             }
             
-            const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-            if (isMobile) {
-                const confirmStart = confirm(
-                    '🎙️ سيطلب المتصفح الإذن لاستخدام الميكروفون.\n\n' +
-                    'عند ظهور النافذة، اختر "سماح" (Allow).\n\n' +
-                    'هل أنت مستعد؟'
-                );
-                if (!confirmStart) return;
+            if (isListening || sessionActive) {
+                console.log('⚠️ جلسة قراءة نشطة بالفعل');
+                return;
             }
             
+            startAttempts++;
+            isEndingSession = false;
+            recognitionRestarting = false;
+            resultCounter = 0;
+            lastResultText = '';
+            
             fullCleanup();
+            
             finalTranscript = '';
             interimTranscript = '';
+            lastFinalText = '';
+            finalTranscriptParts = [];
             hasDetectedSpeech = false;
             isStopping = false;
             sessionActive = false;
-            permissionRequested = false;
-            permissionCheckDone = false;
+            recognitionActive = false;
             
             const transcriptEl = document.getElementById('live-transcript');
             if (transcriptEl) { 
                 transcriptEl.innerHTML = '<span class="interim">⏳ جاري تهيئة الميكروفون...</span>'; 
             }
             
+            const statusEl = document.getElementById('mic-status-indicator');
+            if (statusEl) { 
+                statusEl.textContent = '⏳ جاري طلب الصلاحية...';
+                statusEl.className = 'badge bg-warning mic-status-badge px-3 py-2'; 
+            }
+            
             const activityEl = document.getElementById('audio-activity-status');
             if (activityEl) { 
-                activityEl.textContent = '🔄 جاري تهيئة الصوت...';
+                activityEl.textContent = '🔄 جاري التحقق من صلاحية الميكروفون...';
                 activityEl.className = 'text-muted small'; 
             }
             
-            updateDiag('diag-state', '📌 الحالة: <span class="diag-warn">جاري التهيئة...</span>');
-            updateDiag('diag-recognition', '🔴 التعرف: <span class="diag-warn">جاري التهيئة...</span>');
-            updateDiag('diag-onstart', '🔴 onstart: ⏳ غير معروف');
-            updateDiag('diag-onresult', '🔴 onresult: ⏳ غير معروف');
-            setDiagText('—');
+            updateDiag('diag-state', '📌 الحالة: <span class="diag-warn">جاري التحقق من الصلاحية...</span>');
+            updateDiag('diag-recognition', '🔴 التعرف: <span class="diag-warn">جاري التحقق...</span>');
+            
+            if (!checkSpeechRecognitionSupport()) {
+                showMicrophoneAlert('not-supported');
+                fullCleanup();
+                return;
+            }
+            
+            if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                showMicrophoneAlert('security');
+                fullCleanup();
+                return;
+            }
             
             try {
                 const permCheck = await checkMicrophonePermission();
-                permissionCheckDone = true;
                 
-                if (permCheck.status === 'denied') {
-                    showMicrophonePermissionAlert('denied');
+                if (permCheck.status === 'permanently denied' || permCheck.status === 'denied') {
+                    showMicrophoneAlert('permanently denied');
                     fullCleanup();
                     return;
                 }
                 
-                if (permCheck.status === 'prompt' || permCheck.status === 'unknown') {
+                if (permCheck.status === 'prompt') {
+                    if (isMobileDevice && isFirstStart) {
+                        alert('🎙️ سيطلب المتصفح الإذن لاستخدام الميكروفون.\n\nعند ظهور النافذة، اختر "سماح" (Allow).');
+                        isFirstStart = false;
+                    }
+                    
                     try {
-                        const testStream = await navigator.mediaDevices.getUserMedia({ 
-                            audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true }
+                        const stream = await navigator.mediaDevices.getUserMedia({ 
+                            audio: { 
+                                echoCancellation: true, 
+                                noiseSuppression: true, 
+                                autoGainControl: true,
+                                sampleRate: 44100,
+                                channelCount: 1
+                            } 
                         });
-                        testStream.getTracks().forEach(track => track.stop());
-                        permissionRequested = true;
-                    } catch (permErr) {
-                        if (permErr.name === 'NotAllowedError' || permErr.name === 'PermissionDeniedError') {
-                            showMicrophonePermissionAlert('denied');
-                            fullCleanup();
-                            return;
-                        } else if (permErr.name === 'NotFoundError' || permErr.name === 'DevicesNotFoundError') {
-                            showMicrophonePermissionAlert('not-available');
+                        stream.getTracks().forEach(track => track.stop());
+                        micPermissionStatus = 'granted';
+                    } catch (promptErr) {
+                        if (promptErr.name === 'NotAllowedError' || promptErr.name === 'PermissionDeniedError') {
+                            showMicrophoneAlert('permanently denied');
                             fullCleanup();
                             return;
                         } else {
-                            try {
-                                const retryStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                                retryStream.getTracks().forEach(track => track.stop());
-                                permissionRequested = true;
-                            } catch (retryErr) {
-                                if (retryErr.name === 'NotAllowedError' || retryErr.name === 'PermissionDeniedError') {
-                                    showMicrophonePermissionAlert('denied');
-                                } else {
-                                    showMicrophonePermissionAlert('error', retryErr.message);
-                                }
-                                fullCleanup();
-                                return;
-                            }
+                            showMicrophoneAlert('error', promptErr.message);
+                            fullCleanup();
+                            return;
                         }
                     }
                 }
+                
+                if (permCheck.status === 'unknown' || permCheck.status === 'error') {
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        stream.getTracks().forEach(track => track.stop());
+                        micPermissionStatus = 'granted';
+                    } catch (unknownErr) {
+                        if (unknownErr.name === 'NotAllowedError' || unknownErr.name === 'PermissionDeniedError') {
+                            showMicrophoneAlert('permanently denied');
+                        } else if (unknownErr.name === 'NotFoundError' || unknownErr.name === 'DevicesNotFoundError') {
+                            showMicrophoneAlert('not-available');
+                        } else {
+                            showMicrophoneAlert('error', unknownErr.message);
+                        }
+                        fullCleanup();
+                        return;
+                    }
+                }
+                
+                micPermissionStatus = 'granted';
+                updateDiag('diag-permission', '🟢 الإذن: <span class="diag-ok">ممنوح</span>');
                 
                 let stream;
                 try {
@@ -2097,26 +2467,31 @@
                 } catch (streamErr) {
                     try {
                         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    } catch (retryStreamErr) {
-                        if (retryStreamErr.name === 'NotAllowedError' || retryStreamErr.name === 'PermissionDeniedError') {
-                            showMicrophonePermissionAlert('denied');
-                        } else if (retryStreamErr.name === 'NotFoundError' || retryStreamErr.name === 'DevicesNotFoundError') {
-                            showMicrophonePermissionAlert('not-available');
+                    } catch (retryErr) {
+                        if (retryErr.name === 'NotAllowedError' || retryErr.name === 'PermissionDeniedError') {
+                            showMicrophoneAlert('permanently denied');
+                        } else if (retryErr.name === 'NotFoundError' || retryErr.name === 'DevicesNotFoundError') {
+                            showMicrophoneAlert('not-available');
                         } else {
-                            showMicrophonePermissionAlert('error', retryStreamErr.message);
+                            showMicrophoneAlert('error', retryErr.message);
                         }
                         fullCleanup();
                         return;
                     }
                 }
                 
+                if (!stream) {
+                    showMicrophoneAlert('error', 'لم يتم الحصول على تدفق الصوت');
+                    fullCleanup();
+                    return;
+                }
+                
                 startVolumeMonitoring(stream);
                 updateDiag('diag-mic', '🟢 الميكروفون: <span class="diag-ok">مفتوح</span>');
-                updateDiag('diag-permission', '🟢 الإذن: <span class="diag-ok">ممنوح</span>');
                 
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (!SpeechRecognition) {
-                    showMicrophonePermissionAlert('not-supported');
+                    showMicrophoneAlert('not-supported');
                     fullCleanup();
                     return;
                 }
@@ -2125,34 +2500,34 @@
                 rec.lang = 'ar-SA';
                 rec.continuous = true;
                 rec.interimResults = true;
-                rec.maxAlternatives = 2;
+                rec.maxAlternatives = 1;
                 
-                if (isMobile) {
+                if (isMobileDevice) {
                     rec.continuous = true;
                     rec.interimResults = true;
-                    try {
-                        if (rec.audioTrack) {
-                            rec.audioTrack.applyConstraints({ autoGainControl: true, noiseSuppression: true });
-                        }
-                    } catch (e) {}
                 }
                 
-                rec.onstart = () => {
+                rec.onstart = function() {
+                    console.log('✅ SpeechRecognition onstart - بدء الاستماع');
                     isListening = true;
                     sessionActive = true;
+                    recognitionActive = true;
                     hasDetectedSpeech = false;
                     finalTranscript = '';
                     interimTranscript = '';
+                    lastFinalText = '';
+                    finalTranscriptParts = [];
+                    isEndingSession = false;
                     
                     const transcriptEl2 = document.getElementById('live-transcript');
                     if (transcriptEl2) { 
-                        transcriptEl2.innerHTML = '<span class="interim">⏳ جاري الاستماع...</span>'; 
+                        transcriptEl2.innerHTML = '<span class="interim">🎙️ استمع الآن... تحدث بوضوح</span>'; 
                     }
                     
-                    const statusEl = document.getElementById('mic-status-indicator');
-                    if (statusEl) { 
-                        statusEl.textContent = '🎤 جاري التعرف على الصوت';
-                        statusEl.className = 'badge bg-success mic-status-badge px-3 py-2'; 
+                    const statusEl2 = document.getElementById('mic-status-indicator');
+                    if (statusEl2) { 
+                        statusEl2.textContent = '🎤 جاري التعرف على الصوت';
+                        statusEl2.className = 'badge bg-success mic-status-badge px-3 py-2'; 
                     }
                     
                     const startBtn = document.getElementById('start-btn');
@@ -2169,14 +2544,19 @@
                     updateDiag('diag-recognition', '🟢 التعرف: <span class="diag-ok">بدأ</span>');
                     updateDiag('diag-onstart', '🟢 onstart: <span class="diag-ok">تم التشغيل ✅</span>');
                     updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">جاري الاستماع</span>');
-                    console.log('✅ SpeechRecognition onstart');
                 };
                 
-                rec.onresult = (event) => {
+                rec.onresult = function(event) {
+                    if (isEndingSession) {
+                        console.log('⚠️ تجاهل النتائج لأن الجلسة في حالة إنهاء');
+                        return;
+                    }
+                    
                     let interim = '';
                     let final = '';
+                    
                     for (let i = event.resultIndex; i < event.results.length; ++i) {
-                        const transcript = event.results[i][0].transcript;
+                        const transcript = event.results[i][0].transcript.trim();
                         if (event.results[i].isFinal) { 
                             final += transcript + ' '; 
                         } else { 
@@ -2187,53 +2567,72 @@
                     const transcriptEl2 = document.getElementById('live-transcript');
                     if (!transcriptEl2) return;
                     
-                    if (final) {
-                        finalTranscript += final;
+                    const filteredFinal = filterInvalidTranscript(final);
+                    const filteredInterim = filterInvalidTranscript(interim);
+                    
+                    if (filteredFinal && filteredFinal.trim().length > 0) {
+                        const cleanFinal = cleanRepeatedText(filteredFinal.trim());
+                        
+                        if (!isDuplicateText(cleanFinal, finalTranscript) && cleanFinal !== lastFinalText) {
+                            finalTranscriptParts.push(cleanFinal);
+                            finalTranscript = finalTranscriptParts.join(' ');
+                            lastFinalText = cleanFinal;
+                            
+                            transcriptEl2.innerHTML = 
+                                `<span class="final">${finalTranscript}</span>${filteredInterim ? ' <span class="interim">' + filteredInterim + '</span>' : ''}`;
+                            transcriptEl2.scrollTop = transcriptEl2.scrollHeight;
+                            setDiagText(finalTranscript);
+                            updateDiag('diag-onresult', '🟢 onresult: <span class="diag-ok">تم استقبال النص ✅</span>');
+                            updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">يتم التعرف على الكلام</span>');
+                            hasDetectedSpeech = true;
+                        } else {
+                            console.log('⏭️ تم تجاهل النص المكرر:', cleanFinal);
+                        }
+                        
+                    } else if (filteredInterim && filteredInterim.trim().length > 0) {
+                        const cleanInterim = cleanRepeatedText(filteredInterim.trim());
                         transcriptEl2.innerHTML = 
-                            `<span class="final">${finalTranscript}</span>${interim ? ' <span class="interim">' + interim + '</span>' : ''}`;
+                            `${finalTranscript ? '<span class="final">' + finalTranscript + '</span> ' : ''}<span class="interim">${cleanInterim}</span>`;
                         transcriptEl2.scrollTop = transcriptEl2.scrollHeight;
-                        setDiagText(finalTranscript);
-                        updateDiag('diag-onresult', '🟢 onresult: <span class="diag-ok">تم استقبال النص ✅</span>');
-                        updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">يتم التعرف على الكلام</span>');
-                        hasDetectedSpeech = true;
-                    } else if (interim) {
-                        transcriptEl2.innerHTML = 
-                            `${finalTranscript ? '<span class="final">' + finalTranscript + '</span> ' : ''}<span class="interim">${interim}</span>`;
-                        transcriptEl2.scrollTop = transcriptEl2.scrollHeight;
-                        setDiagText(finalTranscript || interim);
-                        updateDiag('diag-onresult', '🟢 onresult: <span class="diag-ok">يتم الاستقبال (مؤقت)</span>');
-                        if (interim.length > 1) { 
+                        setDiagText(finalTranscript || cleanInterim);
+                        if (cleanInterim.length > 2) { 
                             hasDetectedSpeech = true; 
                         }
                     }
                     
-                    if (final || interim.length > 1) {
+                    if (filteredFinal || (filteredInterim && filteredInterim.length > 2)) {
                         const activityEl2 = document.getElementById('audio-activity-status');
                         if (activityEl2) { 
                             activityEl2.textContent = '🗣️ قراءة قيد الالتقاط';
                             activityEl2.className = 'text-success small'; 
                         }
                     }
-                    console.log('📝 onresult:', final || interim);
+                    
+                    console.log('📝 onresult - final:', filteredFinal, 'interim:', filteredInterim, 'total:', finalTranscript);
                 };
                 
-                rec.onerror = (event) => {
+                rec.onerror = function(event) {
                     console.warn('⚠️ SpeechRecognition error:', event.error);
                     
+                    if (isEndingSession || isStopping) {
+                        console.log('⏭️ تجاهل الخطأ لأن الجلسة في حالة إنهاء');
+                        return;
+                    }
+                    
                     if (event.error === 'not-allowed') {
-                        showMicrophonePermissionAlert('denied');
+                        showMicrophoneAlert('permanently denied');
                         fullCleanup();
                         return;
                     }
                     
                     if (event.error === 'no-speech') {
-                        if (isListening) {
+                        if (isListening && !isStopping) {
                             const activityEl2 = document.getElementById('audio-activity-status');
                             if (activityEl2) { 
                                 activityEl2.textContent = '⏳ لم يتم اكتشاف صوت، حاول التحدث';
                                 activityEl2.className = 'text-warning small'; 
                             }
-                            if (isMobile && !hasDetectedSpeech) {
+                            if (isMobileDevice && !hasDetectedSpeech) {
                                 activityEl2.textContent = '🔊 تحدث بوضوح أكبر... الميكروفون يعمل';
                                 activityEl2.className = 'text-warning small';
                             }
@@ -2242,7 +2641,7 @@
                     }
                     
                     if (event.error === 'audio-capture' || event.error === 'aborted') {
-                        if (!isStopping) {
+                        if (!isStopping && !isEndingSession) {
                             const activityEl2 = document.getElementById('audio-activity-status');
                             if (activityEl2) {
                                 activityEl2.textContent = '⚠️ مشكلة في الميكروفون، حاول مجدداً';
@@ -2250,9 +2649,9 @@
                             }
                             updateDiag('diag-state', '📌 الحالة: <span class="diag-fail">خطأ في الميكروفون</span>');
                             
-                            if (isMobile && !isStopping) {
+                            if (isMobileDevice && !isStopping && startAttempts < 3) {
                                 setTimeout(() => {
-                                    if (!isListening && !isStopping) {
+                                    if (!isListening && !isStopping && !isEndingSession) {
                                         const retry = confirm(
                                             '⚠️ انقطع الاتصال بالميكروفون.\n\n' +
                                             'هل تريد إعادة المحاولة؟'
@@ -2272,43 +2671,30 @@
                     }
                 };
                 
-                rec.onend = () => {
-                    console.log('🔚 SpeechRecognition onend');
+                rec.onend = function() {
+                    console.log('🔚 SpeechRecognition onend - انتهت الجلسة');
+                    recognitionActive = false;
                     
-                    if (isStopping) {
+                    if (isStopping || isEndingSession) {
+                        console.log('✅ إنهاء الجلسة بشكل طبيعي (إيقاف يدوي)');
                         isListening = false;
                         sessionActive = false;
-                        const statusEl = document.getElementById('mic-status-indicator');
-                        if (statusEl) { 
-                            statusEl.textContent = '⏹️ تم الإيقاف';
-                            statusEl.className = 'badge bg-secondary mic-status-badge px-3 py-2'; 
+                        const statusEl2 = document.getElementById('mic-status-indicator');
+                        if (statusEl2) { 
+                            statusEl2.textContent = '⏹️ تم الإيقاف';
+                            statusEl2.className = 'badge bg-secondary mic-status-badge px-3 py-2'; 
                         }
                         const startBtn = document.getElementById('start-btn');
                         const stopBtn = document.getElementById('stop-btn');
                         if (startBtn) startBtn.disabled = false;
                         if (stopBtn) stopBtn.disabled = true;
                         updateDiag('diag-state', '📌 الحالة: <span class="diag-info">تم الإيقاف</span>');
-                        return;
-                    }
-                    
-                    if (isListening) {
-                        isListening = false;
-                        sessionActive = false;
-                        const statusEl = document.getElementById('mic-status-indicator');
-                        if (statusEl) { 
-                            statusEl.textContent = '⏹️ انتهت الجلسة';
-                            statusEl.className = 'badge bg-secondary mic-status-badge px-3 py-2'; 
-                        }
-                        const startBtn = document.getElementById('start-btn');
-                        const stopBtn = document.getElementById('stop-btn');
-                        if (startBtn) startBtn.disabled = false;
-                        if (stopBtn) stopBtn.disabled = true;
-                        updateDiag('diag-state', '📌 الحالة: <span class="diag-warn">انتهت الجلسة</span>');
                         
                         if (finalTranscript && finalTranscript.trim().length > 0) {
                             setTimeout(() => { 
                                 if (!isListening && !sessionActive) { 
                                     processAndGenerateReport(); 
+                                    startAttempts = 0;
                                 } 
                             }, 200);
                         } else {
@@ -2322,47 +2708,83 @@
                                 transcriptEl2.innerHTML = 
                                     '<span class="text-danger">⚠️ لم يتم التعرف على كلام. تأكد من وضوح الصوت.</span>'; 
                             }
-                            
-                            if (isMobile) {
-                                setTimeout(() => {
-                                    if (!isListening && !sessionActive) {
-                                        const retry = confirm(
-                                            '⚠️ لم يتم التعرف على كلام.\n\n' +
-                                            'تأكد من:\n' +
-                                            '• التحدث بوضوح وقرب الفم من الميكروفون\n' +
-                                            '• عدم وجود ضوضاء خلفية\n' +
-                                            '• صلاحية الميكروفون ممنوحة\n\n' +
-                                            'هل تريد إعادة المحاولة؟'
-                                        );
-                                        if (retry) {
-                                            startReadingSession();
-                                        }
-                                    }
-                                }, 1000);
+                            startAttempts = 0;
+                        }
+                        return;
+                    }
+                    
+                    if (isListening) {
+                        console.log('⚠️ انتهت الجلسة بشكل غير متوقع (بدون إيقاف يدوي)');
+                        isListening = false;
+                        sessionActive = false;
+                        const statusEl2 = document.getElementById('mic-status-indicator');
+                        if (statusEl2) { 
+                            statusEl2.textContent = '⏹️ انتهت الجلسة';
+                            statusEl2.className = 'badge bg-secondary mic-status-badge px-3 py-2'; 
+                        }
+                        const startBtn = document.getElementById('start-btn');
+                        const stopBtn = document.getElementById('stop-btn');
+                        if (startBtn) startBtn.disabled = false;
+                        if (stopBtn) stopBtn.disabled = true;
+                        updateDiag('diag-state', '📌 الحالة: <span class="diag-warn">انتهت الجلسة</span>');
+                        
+                        if (finalTranscript && finalTranscript.trim().length > 0) {
+                            setTimeout(() => { 
+                                if (!isListening && !sessionActive) { 
+                                    processAndGenerateReport(); 
+                                    startAttempts = 0;
+                                } 
+                            }, 200);
+                        } else {
+                            const activityEl2 = document.getElementById('audio-activity-status');
+                            if (activityEl2) { 
+                                activityEl2.textContent = '⚠️ انتهت الجلسة بدون قراءة';
+                                activityEl2.className = 'text-danger small'; 
                             }
+                            startAttempts = 0;
                         }
                     }
                 };
                 
                 recognition = rec;
+                recognitionActive = true;
                 updateDiag('diag-recognition', '🟢 التعرف: <span class="diag-ok">تم التهيئة</span>');
                 
-                const delay = isMobile ? 800 : 300;
+                const delay = isMobileDevice ? 500 : 200;
                 setTimeout(() => { 
                     try { 
+                        if (!recognitionActive) {
+                            console.warn('⚠️ التعرف غير نشط، لا يمكن البدء');
+                            return;
+                        }
                         rec.start();
                         updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">جاري بدء التعرف...</span>');
                         console.log('✅ تم استدعاء rec.start()'); 
                     } catch (e) { 
                         console.error('❌ فشل بدء التعرف:', e);
                         if (e.name === 'NotAllowedError' || e.name === 'SecurityError') {
-                            showMicrophonePermissionAlert('denied');
+                            showMicrophoneAlert('permanently denied');
                         } else if (e.name === 'NotFoundError') {
-                            showMicrophonePermissionAlert('not-available');
+                            showMicrophoneAlert('not-available');
+                        } else if (e.name === 'InvalidStateError') {
+                            setTimeout(() => {
+                                try {
+                                    if (recognitionActive) {
+                                        rec.start();
+                                    }
+                                } catch (retryErr) {
+                                    console.error('❌ فشل إعادة بدء التعرف:', retryErr);
+                                    alert('⚠️ حدث خطأ في بدء التعرف الصوتي: ' + retryErr.message);
+                                    fullCleanup();
+                                }
+                            }, 500);
                         } else {
                             alert('⚠️ حدث خطأ في بدء التعرف الصوتي: ' + e.message);
+                            fullCleanup();
                         }
-                        fullCleanup(); 
+                        if (e.name !== 'InvalidStateError') {
+                            fullCleanup(); 
+                        }
                     } 
                 }, delay);
                 
@@ -2370,34 +2792,44 @@
                 console.error('❌ خطأ الميكروفون:', err);
                 
                 if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-                    showMicrophonePermissionAlert('denied');
+                    showMicrophoneAlert('permanently denied');
                 } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-                    showMicrophonePermissionAlert('not-available');
+                    showMicrophoneAlert('not-available');
                 } else if (err.name === 'SecurityError') {
-                    alert('⚠️ يتطلب الميكروفون اتصالاً آمناً (HTTPS).\n\n' +
-                          'تأكد من أن الموقع يعمل عبر HTTPS وليس HTTP.');
+                    showMicrophoneAlert('security');
                 } else {
-                    showMicrophonePermissionAlert('error', err.message || err.name);
+                    showMicrophoneAlert('error', err.message || err.name);
                 }
                 fullCleanup();
             }
         }
 
-        // ===== دالة stopReadingSession (بدون تغيير) =====
+        // ===== دالة stopReadingSession =====
         function stopReadingSession() {
             if (!isListening && !sessionActive) { 
                 alert('⚠️ لا توجد جلسة قراءة نشطة.'); 
                 return; 
             }
+            
+            console.log('⏹️ بدء إيقاف الجلسة يدوياً');
             isStopping = true;
+            isEndingSession = true;
+            
             if (recognition) { 
                 try { 
+                    recognition.onresult = null;
+                    recognition.onerror = null;
                     recognition.onend = null;
                     recognition.stop(); 
-                } catch (e) {} 
+                    console.log('✅ تم إيقاف التعرف');
+                } catch (e) {
+                    console.warn('⚠️ خطأ أثناء إيقاف التعرف:', e);
+                } 
             }
+            
             isListening = false;
             sessionActive = false;
+            recognitionActive = false;
             stopVolumeMonitoring();
             
             const statusEl = document.getElementById('mic-status-indicator');
@@ -2418,13 +2850,23 @@
             }
             
             updateDiag('diag-state', '📌 الحالة: <span class="diag-info">جاري إنشاء التقرير...</span>');
+            
             setTimeout(() => { 
-                processAndGenerateReport();
+                if (finalTranscript && finalTranscript.trim().length > 0) {
+                    processAndGenerateReport();
+                } else {
+                    const transcriptEl = document.getElementById('live-transcript');
+                    if (transcriptEl) { 
+                        transcriptEl.innerHTML = '<span class="text-warning">⏹️ تم إيقاف الجلسة بدون قراءة</span>'; 
+                    }
+                }
                 isStopping = false; 
-            }, 300);
+                isEndingSession = false;
+                startAttempts = 0;
+            }, 500);
         }
 
-        // ===== دوال مساعدة محفوظة =====
+        // ===== دوال مساعدة =====
         function toggleDiagnostic() {
             diagVisible = !diagVisible;
             document.getElementById('diagnostic-panel').style.display = diagVisible ? 'block' : 'none';
@@ -2440,40 +2882,64 @@
         }
 
         function fullCleanup() {
+            console.log('🧹 تنظيف شامل للميكروفون والتعرف');
+            
             if (recognition) {
-                try { recognition.onstart = null;
+                try { 
+                    recognition.onstart = null;
                     recognition.onresult = null;
                     recognition.onerror = null;
                     recognition.onend = null;
                     recognition.abort();
-                    recognition.stop(); } catch (e) {}
+                    recognition.stop(); 
+                } catch (e) {}
                 recognition = null;
             }
-            if (animationFrame) { cancelAnimationFrame(animationFrame);
-                animationFrame = null; }
-            if (analyser) { try { analyser.disconnect(); } catch (e) {}
-                analyser = null; }
-            if (audioContext && audioContext.state !== 'closed') { try { audioContext.close(); } catch (e) {}
-                audioContext = null; }
-            if (mediaStream) { try { mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
-                mediaStream = null; }
+            
+            if (animationFrame) { 
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null; 
+            }
+            if (analyser) { 
+                try { analyser.disconnect(); } catch (e) {}
+                analyser = null; 
+            }
+            if (audioContext && audioContext.state !== 'closed') { 
+                try { audioContext.close(); } catch (e) {}
+                audioContext = null; 
+            }
+            if (mediaStream) { 
+                try { mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+                mediaStream = null; 
+            }
+            
             isListening = false;
             isStopping = false;
             sessionActive = false;
+            recognitionActive = false;
             hasDetectedSpeech = false;
+            isEndingSession = false;
+            lastFinalText = '';
+            finalTranscriptParts = [];
+            
             const statusEl = document.getElementById('mic-status-indicator');
-            if (statusEl) { statusEl.textContent = 'الميكروفون جاهز';
-                statusEl.className = 'badge bg-secondary mic-status-badge px-3 py-2'; }
+            if (statusEl) { 
+                statusEl.textContent = 'الميكروفون جاهز';
+                statusEl.className = 'badge bg-secondary mic-status-badge px-3 py-2'; 
+            }
             const startBtn = document.getElementById('start-btn');
             const stopBtn = document.getElementById('stop-btn');
             if (startBtn) startBtn.disabled = false;
             if (stopBtn) stopBtn.disabled = true;
             const transcriptEl = document.getElementById('live-transcript');
-            if (transcriptEl && !sessionActive) { transcriptEl.innerHTML =
-                    '<span class="placeholder">اضغط على زر البدء وتحدث بوضوح...</span>'; }
+            if (transcriptEl && !sessionActive) { 
+                transcriptEl.innerHTML = '<span class="placeholder">اضغط على زر البدء وتحدث بوضوح...</span>'; 
+            }
             const activityEl = document.getElementById('audio-activity-status');
-            if (activityEl) { activityEl.textContent = '⏳ في انتظار بدء الجلسة';
-                activityEl.className = 'text-muted small'; }
+            if (activityEl) { 
+                activityEl.textContent = '⏳ في انتظار بدء الجلسة';
+                activityEl.className = 'text-muted small'; 
+            }
             document.getElementById('volume-bar').style.width = '0%';
             document.getElementById('volume-percent').textContent = '0%';
             updateDiag('diag-permission', '🔴 الإذن: ⏳ غير معروف');
@@ -2501,21 +2967,32 @@
                 updateDiag('diag-mic', '🟢 الميكروفون: <span class="diag-ok">مفتوح</span>');
                 updateDiag('diag-permission', '🟢 الإذن: <span class="diag-ok">ممنوح</span>');
                 const activityEl = document.getElementById('audio-activity-status');
-                if (activityEl) { activityEl.textContent = '✅ جاهز للاستماع — تحدث بوضوح';
-                    activityEl.className = 'text-success small'; }
-            } catch (e) { console.warn('Volume monitoring error:', e);
-                updateDiag('diag-mic', '🔴 الميكروفون: <span class="diag-fail">خطأ</span>'); }
+                if (activityEl) { 
+                    activityEl.textContent = '✅ جاهز للاستماع — تحدث بوضوح';
+                    activityEl.className = 'text-success small'; 
+                }
+            } catch (e) { 
+                console.warn('Volume monitoring error:', e);
+                updateDiag('diag-mic', '🔴 الميكروفون: <span class="diag-fail">خطأ</span>'); 
+            }
         }
 
         function monitorVolumeLoop() {
-            if (!analyser || !isListening) { if (animationFrame) { cancelAnimationFrame(animationFrame);
-                    animationFrame = null; } return; }
+            if (!analyser || !isListening) { 
+                if (animationFrame) { 
+                    cancelAnimationFrame(animationFrame);
+                    animationFrame = null; 
+                } 
+                return; 
+            }
             try {
                 const dataArray = new Uint8Array(analyser.fftSize);
                 analyser.getByteTimeDomainData(dataArray);
                 let sum = 0;
-                for (let i = 0; i < dataArray.length; i++) { const val = (dataArray[i] - 128) / 128;
-                    sum += val * val; }
+                for (let i = 0; i < dataArray.length; i++) { 
+                    const val = (dataArray[i] - 128) / 128;
+                    sum += val * val; 
+                }
                 const rms = Math.sqrt(sum / dataArray.length);
                 const db = 20 * Math.log10(rms + 0.0001);
                 let percent = Math.min(100, Math.max(0, ((db + 55) / 40) * 100));
@@ -2525,27 +3002,152 @@
                 if (percent > 1.5) {
                     hasDetectedSpeech = true;
                     const activityEl = document.getElementById('audio-activity-status');
-                    if (activityEl) { activityEl.textContent = '🗣️ يتم التقاط الصوت';
-                        activityEl.className = 'text-success small'; }
+                    if (activityEl) { 
+                        activityEl.textContent = '🗣️ يتم التقاط الصوت';
+                        activityEl.className = 'text-success small'; 
+                    }
                 }
-                if (isListening) { animationFrame = requestAnimationFrame(monitorVolumeLoop); } else { if (
-                        animationFrame) { cancelAnimationFrame(animationFrame);
-                        animationFrame = null; } }
-            } catch (e) { if (isListening) { animationFrame = requestAnimationFrame(monitorVolumeLoop); } }
+                if (isListening) { 
+                    animationFrame = requestAnimationFrame(monitorVolumeLoop); 
+                } else { 
+                    if (animationFrame) { 
+                        cancelAnimationFrame(animationFrame);
+                        animationFrame = null; 
+                    } 
+                }
+            } catch (e) { 
+                if (isListening) { 
+                    animationFrame = requestAnimationFrame(monitorVolumeLoop); 
+                } 
+            }
         }
 
         function stopVolumeMonitoring() {
-            if (animationFrame) { cancelAnimationFrame(animationFrame);
-                animationFrame = null; }
-            if (analyser) { try { analyser.disconnect(); } catch (e) {}
-                analyser = null; }
-            if (audioContext && audioContext.state !== 'closed') { try { audioContext.close(); } catch (e) {}
-                audioContext = null; }
-            if (mediaStream) { try { mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
-                mediaStream = null; }
+            if (animationFrame) { 
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null; 
+            }
+            if (analyser) { 
+                try { analyser.disconnect(); } catch (e) {}
+                analyser = null; 
+            }
+            if (audioContext && audioContext.state !== 'closed') { 
+                try { audioContext.close(); } catch (e) {}
+                audioContext = null; 
+            }
+            if (mediaStream) { 
+                try { mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+                mediaStream = null; 
+            }
             document.getElementById('volume-bar').style.width = '0%';
             document.getElementById('volume-percent').textContent = '0%';
             updateDiag('diag-mic', '🔴 الميكروفون: <span class="diag-fail">مغلق</span>');
+        }
+
+        // ===== التحقق من الصلاحية عند تحميل الصفحة =====
+        async function checkMicOnLoad() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                console.warn('⚠️ getUserMedia غير مدعوم');
+                return;
+            }
+            
+            try {
+                const permCheck = await checkMicrophonePermission();
+                if (permCheck.status === 'granted') {
+                    micPermissionStatus = 'granted';
+                    console.log('✅ صلاحية الميكروفون موجودة مسبقاً');
+                    const statusEl = document.getElementById('mic-status-indicator');
+                    if (statusEl) {
+                        statusEl.textContent = '🎤 جاهز للتسجيل';
+                        statusEl.className = 'badge bg-success mic-status-badge px-3 py-2';
+                    }
+                } else if (permCheck.status === 'permanently denied' || permCheck.status === 'denied') {
+                    micPermissionStatus = 'denied';
+                    console.warn('⚠️ صلاحية الميكروفون مرفوضة');
+                    const statusEl = document.getElementById('mic-status-indicator');
+                    if (statusEl) {
+                        statusEl.textContent = '⛔ ميكروفون مرفوض';
+                        statusEl.className = 'badge bg-danger mic-status-badge px-3 py-2';
+                    }
+                } else {
+                    micPermissionStatus = 'prompt';
+                    console.log('⏳ صلاحية الميكروفون في انتظار الطلب');
+                }
+            } catch (e) {
+                console.warn('⚠️ فشل التحقق من الصلاحية:', e);
+            }
+        }
+
+        setTimeout(() => {
+            checkMicOnLoad();
+        }, 1000);
+
+        // ===== دالة processAndGenerateReport =====
+        function processAndGenerateReport() {
+            try {
+                const studentId = document.getElementById('eval-student-select').value;
+                const textId = document.getElementById('eval-text-select').value;
+                const student = appData.students.find(s => s.id === studentId) || { name: 'طالب تجريبي',
+                    grade: 'السادس', className: 'ب', code: '001' };
+                const textObj = appData.texts.find(t => t.id === textId) || { title: 'نص تجريبي',
+                    body: document.getElementById('target-reading-text').innerText ||
+                    'ذهب الفلاح المبكر إلى حقله الأخضر الواسع لكي يحصد القمح الناضج.' };
+                
+                let spokenForAnalysis = finalTranscript || '';
+                if (spokenForAnalysis && spokenForAnalysis.trim().length > 0) {
+                    spokenForAnalysis = cleanFinalTranscriptForAnalysis(spokenForAnalysis);
+                }
+                
+                if (!spokenForAnalysis || spokenForAnalysis.trim().length < 2) {
+                    if (hasDetectedSpeech) {
+                        spokenForAnalysis = 'تم التقاط صوت ولكن لم يتم التعرف عليه بوضوح';
+                    } else {
+                        spokenForAnalysis = '';
+                    }
+                }
+                
+                const transcriptEl = document.getElementById('live-transcript');
+                if (transcriptEl && spokenForAnalysis && spokenForAnalysis.trim().length > 0) {
+                    transcriptEl.innerHTML = `<span class="final">${spokenForAnalysis}</span>`;
+                }
+                
+                const result = analyzeReadingPerformance(textObj.body, spokenForAnalysis);
+                if (!result.skills) result.skills = [];
+                if (!result.analysisDetails) result.analysisDetails = [];
+                
+                const targetStudent = appData.students.find(s => s.id === studentId);
+                if (targetStudent) {
+                    targetStudent.hasRead = true;
+                    saveAppData();
+                    renderStudentsTable();
+                    renderBulbsForCurrentClass();
+                    renderManageView();
+                    loadFilteredStudents();
+                }
+                
+                const reportRecord = {
+                    id: 'rep_' + Date.now(),
+                    date: new Date().toLocaleDateString('ar-SA'),
+                    student: { ...student },
+                    textTitle: textObj.title,
+                    result: { ...result }
+                };
+                appData.reports.unshift(reportRecord);
+                saveAppData();
+                renderAllReportsTable();
+                renderReadingAssessmentCard(student, textObj.title, result);
+                
+                finalTranscript = '';
+                interimTranscript = '';
+                lastFinalText = '';
+                finalTranscriptParts = [];
+                hasDetectedSpeech = false;
+                
+                updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">تم إنشاء التقرير ✅</span>');
+            } catch (error) {
+                console.error('خطأ في إنشاء التقرير:', error);
+                alert('⚠️ حدث خطأ أثناء إنشاء التقرير: ' + error.message);
+            }
         }
 
         // ================================================================
@@ -3190,54 +3792,6 @@
         // ================================================================
         // 14. REMAINING FUNCTIONS (محفوظة)
         // ================================================================
-        function processAndGenerateReport() {
-            try {
-                const studentId = document.getElementById('eval-student-select').value;
-                const textId = document.getElementById('eval-text-select').value;
-                const student = appData.students.find(s => s.id === studentId) || { name: 'طالب تجريبي',
-                    grade: 'السادس', className: 'ب', code: '001' };
-                const textObj = appData.texts.find(t => t.id === textId) || { title: 'نص تجريبي',
-                    body: document.getElementById('target-reading-text').innerText ||
-                    'ذهب الفلاح المبكر إلى حقله الأخضر الواسع لكي يحصد القمح الناضج.' };
-                let spokenForAnalysis = finalTranscript || '';
-                if (!spokenForAnalysis || spokenForAnalysis.trim().length < 2) {
-                    if (hasDetectedSpeech) {
-                        spokenForAnalysis = 'تم التقاط صوت ولكن لم يتم التعرف عليه بوضوح';
-                    } else {
-                        spokenForAnalysis = '';
-                    }
-                }
-                const result = analyzeReadingPerformance(textObj.body, spokenForAnalysis);
-                if (!result.skills) result.skills = [];
-                if (!result.analysisDetails) result.analysisDetails = [];
-                const targetStudent = appData.students.find(s => s.id === studentId);
-                if (targetStudent) {
-                    targetStudent.hasRead = true;
-                    saveAppData();
-                    renderStudentsTable();
-                    renderBulbsForCurrentClass();
-                    renderManageView();
-                    loadFilteredStudents();
-                }
-                const reportRecord = {
-                    id: 'rep_' + Date.now(),
-                    date: new Date().toLocaleDateString('ar-SA'),
-                    student,
-                    textTitle: textObj.title,
-                    result
-                };
-                appData.reports.unshift(reportRecord);
-                saveAppData();
-                renderAllReportsTable();
-                renderReadingAssessmentCard(student, textObj.title, result);
-                finalTranscript = '';
-                updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">تم إنشاء التقرير ✅</span>');
-            } catch (error) {
-                console.error('خطأ في إنشاء التقرير:', error);
-                alert('⚠️ حدث خطأ أثناء إنشاء التقرير: ' + error.message);
-            }
-        }
-
         function renderAllReportsTable() {
             const tbody = document.getElementById('all-reports-table-body');
             if (!tbody) return;
@@ -3256,13 +3810,12 @@
         }
 
         // ================================================================
-        // 15. EXPORT FULL REPORT — مع إضافة بطاقة التقييم وكشف الدعم
+        // 15. EXPORT FULL REPORT
         // ================================================================
         function exportFullReport() {
             try {
                 if (appData.students.length === 0) { alert('لا يوجد طلاب'); return; }
                 const wb = XLSX.utils.book_new();
-                // ===== 1. تقرير جميع الطلاب (محفوظ) =====
                 const headers = ['اسم الطالب', 'الصف', 'الفصل', 'حالة القراءة', 'الدرجة', 'مستوى القراءة', 'دقة النطق',
                     'الطلاقة', 'ربط الحروف', 'إبدال الحروف', 'مخارج الحروف', 'المدود', 'الحركات', 'الشدة',
                     'الكلمات التي أخطأ فيها', 'الحروف التي تحتاج دعم', 'المهارات التي تحتاج دعم', 'التوصيات',
@@ -3341,7 +3894,6 @@
                 ws1['!freeze'] = { xSplit: 0, ySplit: 1 };
                 XLSX.utils.book_append_sheet(wb, ws1, 'تقرير جميع الطلاب');
 
-                // ===== 2. ملخص أداء الفصل (محفوظ) =====
                 const summary = [
                     ['ملخص أداء الفصل'],
                     [],
@@ -3375,7 +3927,6 @@
                 ws2['!cols'] = [{ wch: 30 }, { wch: 20 }];
                 XLSX.utils.book_append_sheet(wb, ws2, 'ملخص أداء الفصل');
 
-                // ===== 3. تحليل مهارات الفصل (محفوظ) =====
                 const skillRows = [
                     ['تحليل مهارات الفصل'],
                     [],
@@ -3408,7 +3959,6 @@
                 ws3['!cols'] = [{ wch: 30 }, { wch: 30 }];
                 XLSX.utils.book_append_sheet(wb, ws3, 'تحليل مهارات الفصل');
 
-                // ===== 4. كشف طلاب الدعم — أقل من 60% (جديد) =====
                 const supportHeaders = ['اسم الطالب', 'الصف', 'الفصل', 'الدرجة', 'المهارة المتعثرة', 'نسبة المهارة',
                     'الخطأ الفعلي', 'التوصية', 'البرنامج العلاجي'
                 ];
@@ -3440,7 +3990,6 @@
                     XLSX.utils.book_append_sheet(wb, ws4, 'طلاب الدعم أقل من 60%');
                 }
 
-                // ===== 5. بطاقة تقييم القراءة (جديد) =====
                 const evalCardHeaders = ['اسم الطالب', 'الصف', 'الفصل', 'تاريخ التقييم', 'اسم المعلم', 'النص المقروء',
                     'الدرجة النهائية', 'مستوى الطالب', 'هل هو من طلاب الدعم؟', 'المهارات التي تحتاج علاج'
                 ];
@@ -3474,7 +4023,6 @@
                     XLSX.utils.book_append_sheet(wb, ws5, 'بطاقة تقييم القراءة');
                 }
 
-                // ===== 6. تحليل المهارات التفصيلي لكل طالب (جديد) =====
                 const skillDetailHeaders = ['اسم الطالب', 'المهارة', 'الدرجة', 'مستوى الإتقان', 'الخطأ المرصود',
                     'التوصية العلاجية'
                 ];
@@ -3503,7 +4051,6 @@
                     XLSX.utils.book_append_sheet(wb, ws6, 'تحليل المهارات التفصيلي');
                 }
 
-                // ===== 7. (جديد) ورقة "أخطاء القراءة التفصيلية" =====
                 const errorDetailHeaders = [
                     'اسم الطالب', 'الصف', 'الفصل', 'الكلمة المقروءة', 'القراءة الصحيحة',
                     'نوع الخطأ', 'الحرف الذي أخطأ فيه', 'الحركة التي أخطأ فيها',
@@ -3550,7 +4097,6 @@
                         const cleanWord = word.replace(/[ًٌٍَُِّْ]/g, '');
                         const cleanSpoken = spoken.replace(/[ًٌٍَُِّْ]/g, '');
 
-                        // 1. حروف
                         if (cleanWord.length === 1 && cleanWord.match(/[ء-ي]/) && cleanSpoken.length === 1) {
                             if (cleanWord !== cleanSpoken) {
                                 errorCategory = 'إبدال حرف';
@@ -3574,7 +4120,6 @@
                                 skillName = 'قراءة الكلمات'; }
                         }
 
-                        // 2. حركات
                         const diacriticsExpected = word.match(/[ًٌٍَُِّْ]/g) || [];
                         const diacriticsSpoken = spoken.match(/[ًٌٍَُِّْ]/g) || [];
                         if (diacriticsExpected.length > 0 || diacriticsSpoken.length > 0) {
@@ -3593,14 +4138,12 @@
                             }
                         }
 
-                        // 3. سكون
                         if (word.includes('ْ') && !spoken.includes('ْ')) {
                             errorCategory = 'خطأ في السكون';
                             diacriticError = 'سكون ← حركة';
                             skillName = 'السكون';
                         }
 
-                        // 4. تنوين
                         if ((word.includes('ً') || word.includes('ٍ') || word.includes('ٌ')) &&
                             !(spoken.includes('ً') || spoken.includes('ٍ') || spoken.includes('ٌ'))) {
                             errorCategory = 'خطأ في التنوين';
@@ -3608,7 +4151,6 @@
                             skillName = 'التنوين';
                         }
 
-                        // 5. لام شمسية / قمرية
                         if (word.includes('ال') || word.includes('ل')) {
                             const idxL = word.indexOf('ل');
                             if (idxL !== -1 && idxL + 1 < word.length) {
@@ -3630,7 +4172,6 @@
                             }
                         }
 
-                        // 6. مدود
                         if (word.includes('ا') && word.includes('َ')) {
                             maddType = 'مد بالألف';
                             if (!spoken.includes('ا') || !spoken.includes('َ')) {
@@ -3651,7 +4192,6 @@
                             }
                         }
 
-                        // 7. شدة
                         if (word.includes('ّ') && !spoken.includes('ّ')) {
                             errorCategory = 'خطأ في الشدة';
                             letterError = 'عدم نطق الشدة';
@@ -3704,7 +4244,6 @@
                     XLSX.utils.book_append_sheet(wb, ws7, 'أخطاء القراءة التفصيلية');
                 }
 
-                // ===== 8. (جديد) ملخص أخطاء كل طالب =====
                 const summaryHeaders = [
                     'اسم الطالب', 'الصف', 'الفصل',
                     'إجمالي أخطاء الحروف', 'إجمالي أخطاء الحركات', 'أخطاء السكون', 'أخطاء التنوين',
@@ -3765,7 +4304,7 @@
         }
 
         // ================================================================
-        // 16. دوال تحليل المهارات (جديدة)
+        // 16. دوال تحليل المهارات
         // ================================================================
         function getDiacriticLabel(d) {
             if (d === 'َ') return 'فتحة';
@@ -3998,7 +4537,7 @@
         }
 
         // ================================================================
-        // 17. ⭐⭐ كشف طلاب الدعم (الواجهة) — محدث ⭐⭐
+        // 17. ⭐⭐ كشف طلاب الدعم (الواجهة) ⭐⭐
         // ================================================================
         function renderSupportList() {
             const container = document.getElementById('support-list-container');
@@ -4168,7 +4707,7 @@
         }
 
         // ================================================================
-        // 18. IMPORT (Word/Excel) + SETTINGS (محفوظة)
+        // 18. IMPORT (Word/Excel) + SETTINGS
         // ================================================================
         function importWordFile(event) {
             const file = event.target.files[0];
