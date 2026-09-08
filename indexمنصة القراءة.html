@@ -2175,7 +2175,7 @@
         }
 
         // ================================================================
-        // 11. ⭐⭐ محرك القراءة الصوتية - مع منع التكرار ⭐⭐
+        // 11. ⭐⭐ محرك القراءة الصوتية - إصلاح كامل لمنع التكرار ⭐⭐
         // ================================================================
 
         // ===== إدارة الجلسات =====
@@ -2207,7 +2207,8 @@
                     animationFrame: null,
                     restartAttempts: 0,
                     maxRestartAttempts: 3,
-                    lastAddedText: ''
+                    lastAddedText: '',
+                    addedWords: new Set() // جديد: لتتبع الكلمات المضافة
                 };
                 console.log('📌 تم إنشاء جلسة جديدة:', this.sessionId);
                 return this.currentSession;
@@ -2262,34 +2263,96 @@
                 return this.currentSession && this.currentSession.processedIndices.has(index);
             }
 
+            // ===== الدالة المعدلة بالكامل لمنع التكرار =====
             addFinalText(text) {
                 if (!this.currentSession) return false;
                 if (!text || text.trim().length === 0) return false;
+                
                 const cleanText = text.trim();
                 const currentText = this.currentSession.finalTranscript;
                 const lastAdded = this.currentSession.lastAddedText;
+                const addedWords = this.currentSession.addedWords;
 
-                if (currentText.includes(cleanText) && cleanText.length < currentText.length) {
-                    console.log('⏭️ تجاهل نص مكرر:', cleanText);
+                // 1. منع التكرار التام - إذا كان النص موجوداً بالفعل
+                if (currentText.includes(cleanText)) {
+                    console.log('⏭️ تجاهل نص مكرر (موجود بالفعل):', cleanText);
                     return false;
                 }
+
+                // 2. منع إضافة نفس النص مرتين متتاليتين
                 if (lastAdded === cleanText) {
                     console.log('⏭️ تجاهل نص مكرر (مطابق لآخر نص):', cleanText);
                     return false;
                 }
+
+                // 3. منع إضافة نص أقصر من النص السابق إذا كان يحتويه
                 if (lastAdded && lastAdded.includes(cleanText) && cleanText.length < lastAdded.length) {
                     console.log('⏭️ تجاهل نص أقصر من النص السابق:', cleanText);
                     return false;
                 }
 
-                if (currentText.length > 0) {
-                    this.currentSession.finalTranscript += ' ' + cleanText;
-                } else {
-                    this.currentSession.finalTranscript = cleanText;
+                // 4. منع إضافة كلمات مكررة داخل النص الجديد نفسه
+                const words = cleanText.split(/\s+/);
+                const uniqueWords = [];
+                let prevWord = '';
+                let hasInternalDuplicate = false;
+                
+                for (let i = 0; i < words.length; i++) {
+                    const currentWord = words[i];
+                    // إذا كانت الكلمة مكررة داخلياً (مثل: ذهب ذهب)
+                    if (currentWord !== prevWord) {
+                        uniqueWords.push(currentWord);
+                        prevWord = currentWord;
+                    } else {
+                        hasInternalDuplicate = true;
+                    }
                 }
-                this.currentSession.lastAddedText = cleanText;
+                
+                // استخدام النص المنظف من التكرارات الداخلية
+                const dedupText = uniqueWords.join(' ');
+                const finalText = (hasInternalDuplicate || dedupText !== cleanText) ? dedupText : cleanText;
+
+                // 5. التحقق من عدم وجود كلمات مكررة في النص النهائي
+                const finalWords = finalText.split(/\s+/);
+                let cleanFinalWords = [];
+                let seenWords = new Set();
+                let hasDuplicateWord = false;
+                
+                for (let i = 0; i < finalWords.length; i++) {
+                    const word = finalWords[i];
+                    // إذا كانت الكلمة ظهرت من قبل في هذه الجلسة
+                    if (addedWords.has(word)) {
+                        hasDuplicateWord = true;
+                        console.log('⏭️ تجاهل كلمة مكررة:', word);
+                        continue;
+                    }
+                    cleanFinalWords.push(word);
+                    seenWords.add(word);
+                }
+                
+                // إذا لم يتبقى كلمات بعد التصفية
+                if (cleanFinalWords.length === 0) {
+                    console.log('⏭️ جميع الكلمات مكررة، تم تجاهل النص');
+                    return false;
+                }
+                
+                const finalCleanText = cleanFinalWords.join(' ');
+                
+                // 6. إضافة النص النهائي
+                if (currentText.length > 0) {
+                    this.currentSession.finalTranscript += ' ' + finalCleanText;
+                } else {
+                    this.currentSession.finalTranscript = finalCleanText;
+                }
+                
+                // 7. تسجيل الكلمات المضافة
+                cleanFinalWords.forEach(word => {
+                    addedWords.add(word);
+                });
+                
+                this.currentSession.lastAddedText = finalCleanText;
                 this.currentSession.hasFinalResult = true;
-                console.log('✅ تم إضافة نص جديد:', cleanText);
+                console.log('✅ تم إضافة نص جديد:', finalCleanText);
                 return true;
             }
 
@@ -2303,6 +2366,7 @@
                     this.currentSession.hasFinalResult = false;
                     this.currentSession.processedIndices = new Set();
                     this.currentSession.lastAddedText = '';
+                    this.currentSession.addedWords = new Set();
                 }
             }
 
@@ -2551,6 +2615,7 @@
             }
         }
 
+        // ===== دالة startReadingSession المعدلة =====
         async function startReadingSession() {
             const studentId = document.getElementById('eval-student-select').value;
             const textId = document.getElementById('eval-text-select').value;
@@ -2760,7 +2825,24 @@
                     const filteredInterim = filterInvalidTranscript(interimText);
 
                     if (filteredFinal && filteredFinal.trim().length > 0) {
-                        const cleanFinal = cleanRepeatedText(filteredFinal.trim());
+                        // تنظيف النص من التكرارات المتتالية
+                        let cleanFinal = cleanRepeatedText(filteredFinal.trim());
+                        
+                        // تقسيم النص إلى كلمات وإزالة التكرارات الداخلية
+                        let words = cleanFinal.split(/\s+/);
+                        let uniqueWords = [];
+                        let seen = new Set();
+                        for (let i = 0; i < words.length; i++) {
+                            const word = words[i];
+                            // نسمح بتكرار الكلمات إذا كانت مختلفة أو متباعدة
+                            if (!seen.has(word) || (i > 0 && words[i-1] === word)) {
+                                uniqueWords.push(word);
+                                seen.add(word);
+                            }
+                        }
+                        cleanFinal = uniqueWords.join(' ');
+                        
+                        // إضافة النص المنظف
                         const added = sessionManager.addFinalText(cleanFinal);
                         if (added) {
                             const fullText = sessionManager.getFinalTranscript();
@@ -3799,7 +3881,7 @@
         }
 
         // ================================================================
-        // 15. EXPORT FULL REPORT
+        // 15. EXPORT FULL REPORT (محفوظ)
         // ================================================================
         function exportFullReport() {
             try {
@@ -4293,7 +4375,7 @@
         }
 
         // ================================================================
-        // 16. دوال تحليل المهارات
+        // 16. دوال تحليل المهارات (محفوظة)
         // ================================================================
         function getDiacriticLabel(d) {
             if (d === 'َ') return 'فتحة';
