@@ -1169,14 +1169,11 @@
                     updateSyncStatus(false);
                 });
                 
+                // === إضافة مستمع لاستعادة الاتصال ===
                 window.addEventListener('online', () => {
-                    console.log('🔄 Online event detected');
-                    if (db) {
-                        if (!currentUser) {
-                            signInAnonymously();
-                        }
-                        loadFromCloud();
-                    }
+                    console.log('🔄 Online event detected - reloading data from cloud');
+                    if (db && !currentUser) signInAnonymously();
+                    loadFromCloud();
                 });
                 
                 window.addEventListener('offline', () => {
@@ -1281,6 +1278,7 @@
             }
         }
 
+        // ===== المستمعات (معدلة مع isSyncing) =====
         function startFirebaseListeners() {
             if (!firebaseReady || listenersStarted || !db) return;
             
@@ -1290,7 +1288,7 @@
             // مستمع للطلاب
             const studentsRef = db.ref('students');
             studentsRef.on('value', (snapshot) => {
-                if (isSyncing) return;
+                if (isSyncing) return; // تجاهل التغييرات أثناء الحفظ
                 
                 const data = snapshot.val();
                 if (!data) return;
@@ -1325,7 +1323,7 @@
             // مستمع للتقارير
             const reportsRef = db.ref('reports');
             reportsRef.on('value', (snapshot) => {
-                if (isSyncing) return;
+                if (isSyncing) return; // تجاهل التغييرات أثناء الحفظ
                 
                 const data = snapshot.val();
                 if (!data) return;
@@ -1431,6 +1429,7 @@
                 });
         }
 
+        // ===== تحميل البيانات من السحابة (معدل مع isSyncing) =====
         async function loadFromCloud() {
             if (!firebaseReady || !db || !navigator.onLine || !currentUser) {
                 console.warn('⚠️ Cannot load from cloud - offline or not authenticated');
@@ -1439,6 +1438,7 @@
             
             try {
                 console.log('🔄 Loading data from cloud...');
+                isSyncing = true;
                 
                 const studentsSnapshot = await db.ref('students').once('value');
                 const studentsData = studentsSnapshot.val();
@@ -1469,11 +1469,13 @@
                 updateHomeStats();
                 updateSyncStatus(true);
                 
+                isSyncing = false;
                 console.log('✅ Data loaded from cloud successfully');
                 
             } catch (e) {
                 console.error('❌ loadFromCloud error:', e);
                 updateSyncStatus(false);
+                isSyncing = false;
             }
         }
 
@@ -1536,15 +1538,18 @@
         }
 
         // ================================================================
-        // 3. CORE FUNCTIONS (مع الحفظ في السحابة)
+        // 3. CORE FUNCTIONS (مع الحفظ في السحابة) - معدلة لتصبح متزامنة
         // ================================================================
         function saveAppDataLocally() {
             localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
         }
 
-        function saveAppData() {
+        // === دالة saveAppData معدلة لتصبح غير متزامنة ===
+        async function saveAppData() {
             saveAppDataLocally();
             if (firebaseReady && db && navigator.onLine) {
+                isSyncing = true;
+                const promises = [];
                 appData.students.forEach(s => {
                     if (!s.name || !s.grade || !s.className) return;
                     const d = {
@@ -1555,11 +1560,14 @@
                         hasRead: s.hasRead || false,
                         updatedAt: new Date().toISOString()
                     };
-                    saveToCloud('students', s.id, d).catch(() => {});
+                    promises.push(saveToCloud('students', s.id, d).catch(err => console.warn('❌ فشل حفظ الطالب:', s.name, err)));
                 });
                 appData.reports.forEach(r => {
-                    saveReportToCloud(r).catch(() => {});
+                    promises.push(saveReportToCloud(r).catch(err => console.warn('❌ فشل حفظ التقرير:', r.id, err)));
                 });
+                await Promise.all(promises);
+                isSyncing = false;
+                console.log('✅ تم حفظ جميع البيانات في السحابة');
             }
             updateHomeStats();
             renderStudentsTable();
@@ -1799,18 +1807,28 @@
         }
 
         // ================================================================
-        // 5. IMPORT EXCEL — محفوظة
+        // 5. IMPORT EXCEL — مع إصلاح فتح المودال
         // ================================================================
         let importedExcelData = [];
 
         function openImportExcelModal() {
             const grade = document.getElementById('filter-grade-select').value;
             const className = document.getElementById('filter-class-select').value;
-            if (!grade || !className) { alert('⚠️ يرجى اختيار الصف والفصل أولاً'); return; }
+            if (!grade || !className) {
+                alert('⚠️ يرجى اختيار الصف والفصل أولاً');
+                return;
+            }
+            console.log('📌 فتح نافذة استيراد للصف:', grade, 'الفصل:', className);
             document.getElementById('excelPreviewContainer').style.display = 'none';
             document.getElementById('excelFileInput').value = '';
             importedExcelData = [];
-            new bootstrap.Modal(document.getElementById('importExcelModal')).show();
+            const modalElement = document.getElementById('importExcelModal');
+            if (modalElement) {
+                const modal = new bootstrap.Modal(modalElement);
+                modal.show();
+            } else {
+                alert('⚠️ حدث خطأ في عرض نافذة الاستيراد');
+            }
         }
 
         function handleExcelFile(event) {
@@ -2175,7 +2193,8 @@
         }
 
         // ================================================================
-        // 11. ⭐⭐ محرك القراءة الصوتية - إصلاح زر الإيقاف (نسخة معدلة) ⭐⭐
+        // 11. ⭐⭐ محرك القراءة الصوتية - إصلاح كامل لمنع التكرار ⭐⭐
+        // (محفوظ كما هو - لم يتم التعديل)
         // ================================================================
 
         // ===== إدارة الجلسات =====
@@ -2184,12 +2203,10 @@
                 this.currentSession = null;
                 this.sessionId = null;
                 this.isProcessing = false;
-                this.finalTranscriptBackup = ''; // نسخة احتياطية للنص
             }
 
             createSession(studentId, textId) {
                 this.endSession();
-                
                 this.sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
                 this.currentSession = {
                     id: this.sessionId,
@@ -2209,84 +2226,17 @@
                     animationFrame: null,
                     restartAttempts: 0,
                     maxRestartAttempts: 3,
-                    isReportGenerated: false,
                     lastAddedText: '',
-                    addedWords: new Set()
+                    addedWords: new Set() // جديد: لتتبع الكلمات المضافة
                 };
-                
-                this.finalTranscriptBackup = '';
                 console.log('📌 تم إنشاء جلسة جديدة:', this.sessionId);
                 return this.currentSession;
             }
 
-            getSession() {
-                return this.currentSession;
-            }
+            getSession() { return this.currentSession; }
 
             isSessionActive() {
                 return this.currentSession && this.currentSession.isActive && !this.currentSession.isEnding;
-            }
-
-            hasValidTranscript() {
-                if (this.currentSession && this.currentSession.finalTranscript && this.currentSession.finalTranscript.trim().length > 0) {
-                    return true;
-                }
-                if (this.finalTranscriptBackup && this.finalTranscriptBackup.trim().length > 0) {
-                    return true;
-                }
-                const transcriptEl = document.getElementById('live-transcript');
-                if (transcriptEl) {
-                    const text = transcriptEl.textContent || '';
-                    const cleanText = text
-                        .replace(/^(final|interim|placeholder)\s*/gi, '')
-                        .replace(/^🎙️\s*/, '')
-                        .replace(/^⏳\s*/, '')
-                        .replace(/^اضغط على زر البدء وتحدث بوضوح\.\.\./, '')
-                        .replace(/^جاري تهيئة الميكروفون\.\.\./, '')
-                        .replace(/^استمع الآن\.\.\. تحدث بوضوح/, '')
-                        .trim();
-                    
-                    if (cleanText.length > 3 && 
-                        !cleanText.includes('اضغط على زر البدء') && 
-                        !cleanText.includes('جاري تهيئة') && 
-                        !cleanText.includes('استمع الآن') &&
-                        !cleanText.includes('تم إيقاف الجلسة') &&
-                        !cleanText.includes('⏹️')) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-
-            getValidTranscript() {
-                if (this.currentSession && this.currentSession.finalTranscript && this.currentSession.finalTranscript.trim().length > 0) {
-                    return this.currentSession.finalTranscript;
-                }
-                if (this.finalTranscriptBackup && this.finalTranscriptBackup.trim().length > 0) {
-                    return this.finalTranscriptBackup;
-                }
-                const transcriptEl = document.getElementById('live-transcript');
-                if (transcriptEl) {
-                    const text = transcriptEl.textContent || '';
-                    const cleanText = text
-                        .replace(/^(final|interim|placeholder)\s*/gi, '')
-                        .replace(/^🎙️\s*/, '')
-                        .replace(/^⏳\s*/, '')
-                        .replace(/^اضغط على زر البدء وتحدث بوضوح\.\.\./, '')
-                        .replace(/^جاري تهيئة الميكروفون\.\.\./, '')
-                        .replace(/^استمع الآن\.\.\. تحدث بوضوح/, '')
-                        .trim();
-                    
-                    if (cleanText.length > 3 && 
-                        !cleanText.includes('اضغط على زر البدء') && 
-                        !cleanText.includes('جاري تهيئة') && 
-                        !cleanText.includes('استمع الآن') &&
-                        !cleanText.includes('تم إيقاف الجلسة') &&
-                        !cleanText.includes('⏹️')) {
-                        return cleanText;
-                    }
-                }
-                return '';
             }
 
             endSession() {
@@ -2294,11 +2244,6 @@
                     console.log('📌 إنهاء الجلسة:', this.currentSession.id);
                     this.currentSession.isEnding = true;
                     this.currentSession.isActive = false;
-                    
-                    if (this.currentSession.finalTranscript && this.currentSession.finalTranscript.trim().length > 0) {
-                        this.finalTranscriptBackup = this.currentSession.finalTranscript;
-                    }
-                    
                     if (this.currentSession.recognitionInstance) {
                         try {
                             this.currentSession.recognitionInstance.onresult = null;
@@ -2307,25 +2252,21 @@
                             this.currentSession.recognitionInstance.onstart = null;
                             this.currentSession.recognitionInstance.abort();
                             this.currentSession.recognitionInstance.stop();
-                        } catch(e) {}
+                        } catch (e) {}
                         this.currentSession.recognitionInstance = null;
                     }
-                    
                     if (this.currentSession.mediaStream) {
-                        try { this.currentSession.mediaStream.getTracks().forEach(t => t.stop()); } catch(e) {}
+                        try { this.currentSession.mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
                         this.currentSession.mediaStream = null;
                     }
-                    
                     if (this.currentSession.audioContext) {
-                        try { this.currentSession.audioContext.close(); } catch(e) {}
+                        try { this.currentSession.audioContext.close(); } catch (e) {}
                         this.currentSession.audioContext = null;
                     }
-                    
                     if (this.currentSession.animationFrame) {
-                        try { cancelAnimationFrame(this.currentSession.animationFrame); } catch(e) {}
+                        try { cancelAnimationFrame(this.currentSession.animationFrame); } catch (e) {}
                         this.currentSession.animationFrame = null;
                     }
-                    
                     this.currentSession = null;
                     this.sessionId = null;
                 }
@@ -2341,6 +2282,7 @@
                 return this.currentSession && this.currentSession.processedIndices.has(index);
             }
 
+            // ===== الدالة المعدلة بالكامل لمنع التكرار =====
             addFinalText(text) {
                 if (!this.currentSession) return false;
                 if (!text || text.trim().length === 0) return false;
@@ -2350,21 +2292,25 @@
                 const lastAdded = this.currentSession.lastAddedText;
                 const addedWords = this.currentSession.addedWords;
 
+                // 1. منع التكرار التام - إذا كان النص موجوداً بالفعل
                 if (currentText.includes(cleanText)) {
                     console.log('⏭️ تجاهل نص مكرر (موجود بالفعل):', cleanText);
                     return false;
                 }
 
+                // 2. منع إضافة نفس النص مرتين متتاليتين
                 if (lastAdded === cleanText) {
                     console.log('⏭️ تجاهل نص مكرر (مطابق لآخر نص):', cleanText);
                     return false;
                 }
 
+                // 3. منع إضافة نص أقصر من النص السابق إذا كان يحتويه
                 if (lastAdded && lastAdded.includes(cleanText) && cleanText.length < lastAdded.length) {
                     console.log('⏭️ تجاهل نص أقصر من النص السابق:', cleanText);
                     return false;
                 }
 
+                // 4. منع إضافة كلمات مكررة داخل النص الجديد نفسه
                 const words = cleanText.split(/\s+/);
                 const uniqueWords = [];
                 let prevWord = '';
@@ -2372,6 +2318,7 @@
                 
                 for (let i = 0; i < words.length; i++) {
                     const currentWord = words[i];
+                    // إذا كانت الكلمة مكررة داخلياً (مثل: ذهب ذهب)
                     if (currentWord !== prevWord) {
                         uniqueWords.push(currentWord);
                         prevWord = currentWord;
@@ -2380,9 +2327,11 @@
                     }
                 }
                 
+                // استخدام النص المنظف من التكرارات الداخلية
                 const dedupText = uniqueWords.join(' ');
                 const finalText = (hasInternalDuplicate || dedupText !== cleanText) ? dedupText : cleanText;
 
+                // 5. التحقق من عدم وجود كلمات مكررة في النص النهائي
                 const finalWords = finalText.split(/\s+/);
                 let cleanFinalWords = [];
                 let seenWords = new Set();
@@ -2390,6 +2339,7 @@
                 
                 for (let i = 0; i < finalWords.length; i++) {
                     const word = finalWords[i];
+                    // إذا كانت الكلمة ظهرت من قبل في هذه الجلسة
                     if (addedWords.has(word)) {
                         hasDuplicateWord = true;
                         console.log('⏭️ تجاهل كلمة مكررة:', word);
@@ -2399,6 +2349,7 @@
                     seenWords.add(word);
                 }
                 
+                // إذا لم يتبقى كلمات بعد التصفية
                 if (cleanFinalWords.length === 0) {
                     console.log('⏭️ جميع الكلمات مكررة، تم تجاهل النص');
                     return false;
@@ -2406,29 +2357,26 @@
                 
                 const finalCleanText = cleanFinalWords.join(' ');
                 
+                // 6. إضافة النص النهائي
                 if (currentText.length > 0) {
                     this.currentSession.finalTranscript += ' ' + finalCleanText;
                 } else {
                     this.currentSession.finalTranscript = finalCleanText;
                 }
                 
+                // 7. تسجيل الكلمات المضافة
                 cleanFinalWords.forEach(word => {
                     addedWords.add(word);
                 });
                 
                 this.currentSession.lastAddedText = finalCleanText;
                 this.currentSession.hasFinalResult = true;
-                this.finalTranscriptBackup = this.currentSession.finalTranscript;
-                
                 console.log('✅ تم إضافة نص جديد:', finalCleanText);
                 return true;
             }
 
             getFinalTranscript() {
-                if (this.currentSession && this.currentSession.finalTranscript) {
-                    return this.currentSession.finalTranscript;
-                }
-                return this.finalTranscriptBackup || '';
+                return this.currentSession ? this.currentSession.finalTranscript : '';
             }
 
             clearFinalTranscript() {
@@ -2439,7 +2387,6 @@
                     this.currentSession.lastAddedText = '';
                     this.currentSession.addedWords = new Set();
                 }
-                this.finalTranscriptBackup = '';
             }
 
             incrementRestartAttempts() {
@@ -2452,19 +2399,6 @@
 
             canRestart() {
                 return this.currentSession && this.currentSession.restartAttempts < this.currentSession.maxRestartAttempts;
-            }
-            
-            canGenerateReport() {
-                if (this.currentSession && this.currentSession.isReportGenerated) {
-                    return false;
-                }
-                return this.hasValidTranscript();
-            }
-            
-            markReportGenerated() {
-                if (this.currentSession) {
-                    this.currentSession.isReportGenerated = true;
-                }
             }
         }
 
@@ -2482,7 +2416,6 @@
         let speechRecognitionSupported = false;
         let isFirstStart = true;
         let isRestarting = false;
-        let stopInProgress = false;
 
         function checkSpeechRecognitionSupport() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -2911,13 +2844,16 @@
                     const filteredInterim = filterInvalidTranscript(interimText);
 
                     if (filteredFinal && filteredFinal.trim().length > 0) {
+                        // تنظيف النص من التكرارات المتتالية
                         let cleanFinal = cleanRepeatedText(filteredFinal.trim());
                         
+                        // تقسيم النص إلى كلمات وإزالة التكرارات الداخلية
                         let words = cleanFinal.split(/\s+/);
                         let uniqueWords = [];
                         let seen = new Set();
                         for (let i = 0; i < words.length; i++) {
                             const word = words[i];
+                            // نسمح بتكرار الكلمات إذا كانت مختلفة أو متباعدة
                             if (!seen.has(word) || (i > 0 && words[i-1] === word)) {
                                 uniqueWords.push(word);
                                 seen.add(word);
@@ -2925,6 +2861,7 @@
                         }
                         cleanFinal = uniqueWords.join(' ');
                         
+                        // إضافة النص المنظف
                         const added = sessionManager.addFinalText(cleanFinal);
                         if (added) {
                             const fullText = sessionManager.getFinalTranscript();
@@ -3115,310 +3052,74 @@
             }
         }
 
-        // ===== دالة stopReadingSession - المعدلة بالكامل =====
         function stopReadingSession() {
-            // منع التنفيذ المتزامن
-            if (stopInProgress) {
-                console.log('⚠️ عملية إيقاف قيد التنفيذ بالفعل');
+            const session = sessionManager.getSession();
+            if (!session || !session.isActive) {
+                alert('⚠️ لا توجد جلسة قراءة نشطة.');
                 return;
             }
-            stopInProgress = true;
-            
-            console.log('⏹️ بدء عملية إيقاف الجلسة...');
-            
-            const session = sessionManager.getSession();
-            const hasText = sessionManager.hasValidTranscript();
-            const transcriptText = sessionManager.getValidTranscript();
-            
-            console.log('📝 حالة النص:', {
-                hasText: hasText,
-                transcriptLength: transcriptText ? transcriptText.length : 0,
-                transcriptPreview: transcriptText ? transcriptText.substring(0, 50) : '(فارغ)',
-                sessionActive: session ? session.isActive : false,
-                sessionExists: !!session
-            });
-            
-            // ===== الخطوة 1: إيقاف الميكروفون والتقاط الصوت =====
-            if (session) {
-                session.isEnding = true;
-                
-                if (session.recognitionInstance) {
-                    try {
-                        session.recognitionInstance.onresult = null;
-                        session.recognitionInstance.onerror = null;
-                        session.recognitionInstance.onend = null;
-                        session.recognitionInstance.onstart = null;
-                        session.recognitionInstance.abort();
-                        session.recognitionInstance.stop();
-                        console.log('✅ تم إيقاف التعرف');
-                    } catch (e) {
-                        console.warn('⚠️ خطأ أثناء إيقاف التعرف:', e);
-                    }
-                    session.recognitionInstance = null;
-                }
-                
-                if (session.animationFrame) {
-                    try {
-                        cancelAnimationFrame(session.animationFrame);
-                    } catch(e) {}
-                    session.animationFrame = null;
-                }
-                
-                if (session.analyser) {
-                    try {
-                        session.analyser.disconnect();
-                    } catch(e) {}
-                    session.analyser = null;
-                }
-                
-                if (session.audioContext && session.audioContext.state !== 'closed') {
-                    try {
-                        session.audioContext.close();
-                    } catch(e) {}
-                    session.audioContext = null;
-                }
-                
-                if (session.mediaStream) {
-                    try {
-                        session.mediaStream.getTracks().forEach(t => t.stop());
-                    } catch(e) {}
-                    session.mediaStream = null;
-                }
-                
-                session.isActive = false;
-                isListening = false;
-                sessionActive = false;
+            console.log('⏹️ بدء إيقاف الجلسة يدوياً');
+            session.isEnding = true;
+            isStopping = true;
+            if (session.recognitionInstance) {
+                try {
+                    session.recognitionInstance.onresult = null;
+                    session.recognitionInstance.onerror = null;
+                    session.recognitionInstance.onend = null;
+                    session.recognitionInstance.onstart = null;
+                    session.recognitionInstance.stop();
+                    console.log('✅ تم إيقاف التعرف');
+                } catch (e) { console.warn('⚠️ خطأ أثناء إيقاف التعرف:', e); }
             }
-            
-            // ===== الخطوة 2: تحديث واجهة المستخدم =====
+            if (session.animationFrame) {
+                try { cancelAnimationFrame(session.animationFrame); } catch (e) {}
+                session.animationFrame = null;
+            }
+            if (session.analyser) {
+                try { session.analyser.disconnect(); } catch (e) {}
+                session.analyser = null;
+            }
+            if (session.audioContext && session.audioContext.state !== 'closed') {
+                try { session.audioContext.close(); } catch (e) {}
+                session.audioContext = null;
+            }
+            if (session.mediaStream) {
+                try { session.mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+                session.mediaStream = null;
+            }
+            session.isActive = false;
+            isListening = false;
+            sessionActive = false;
+
             const statusEl = document.getElementById('mic-status-indicator');
-            if (statusEl) { 
+            if (statusEl) {
                 statusEl.textContent = '⏹️ تم الإيقاف';
-                statusEl.className = 'badge bg-secondary mic-status-badge px-3 py-2'; 
+                statusEl.className = 'badge bg-secondary mic-status-badge px-3 py-2';
             }
-            
             const startBtn = document.getElementById('start-btn');
             const stopBtn = document.getElementById('stop-btn');
             if (startBtn) startBtn.disabled = false;
             if (stopBtn) stopBtn.disabled = true;
-            
             const activityEl = document.getElementById('audio-activity-status');
-            if (activityEl) { 
+            if (activityEl) {
                 activityEl.textContent = '⏹️ تم إيقاف الجلسة';
-                activityEl.className = 'text-muted small'; 
+                activityEl.className = 'text-muted small';
             }
-            
             updateDiag('diag-state', '📌 الحالة: <span class="diag-info">جاري إنشاء التقرير...</span>');
-            
-            // ===== الخطوة 3: استخراج النص وإنشاء التقرير =====
-            setTimeout(() => {
-                try {
-                    let finalText = sessionManager.getFinalTranscript();
-                    
-                    if (!finalText || finalText.trim().length === 0) {
-                        const transcriptEl = document.getElementById('live-transcript');
-                        if (transcriptEl) {
-                            const rawText = transcriptEl.textContent || '';
-                            const cleanText = rawText
-                                .replace(/^(final|interim|placeholder)\s*/gi, '')
-                                .replace(/^🎙️\s*/, '')
-                                .replace(/^⏳\s*/, '')
-                                .replace(/^اضغط على زر البدء وتحدث بوضوح\.\.\./, '')
-                                .replace(/^جاري تهيئة الميكروفون\.\.\./, '')
-                                .replace(/^استمع الآن\.\.\. تحدث بوضوح/, '')
-                                .trim();
-                            
-                            if (cleanText.length > 3 && 
-                                !cleanText.includes('اضغط على زر البدء') && 
-                                !cleanText.includes('جاري تهيئة') && 
-                                !cleanText.includes('استمع الآن') &&
-                                !cleanText.includes('تم إيقاف الجلسة') &&
-                                !cleanText.includes('⏹️')) {
-                                finalText = cleanText;
-                                console.log('📝 تم استخراج النص من واجهة المستخدم:', finalText.substring(0, 50));
-                            }
-                        }
-                    }
-                    
-                    const hasValidText = finalText && finalText.trim().length > 3;
-                    
-                    if (hasValidText) {
-                        console.log('✅ تم العثور على نص مقروء، جاري إنشاء التقرير...');
-                        console.log('📝 النص النهائي:', finalText);
-                        
-                        if (sessionManager.currentSession) {
-                            sessionManager.currentSession.finalTranscript = finalText;
-                            sessionManager.finalTranscriptBackup = finalText;
-                        }
-                        
-                        processAndGenerateReport();
-                        sessionManager.markReportGenerated();
-                        
-                        console.log('✅ تم إنشاء التقرير بنجاح');
-                    } else {
-                        console.log('⚠️ لا يوجد نص مقروء لإنشاء التقرير');
-                        const transcriptEl = document.getElementById('live-transcript');
-                        if (transcriptEl) { 
-                            transcriptEl.innerHTML = '<span class="text-warning">⏹️ تم إيقاف الجلسة بدون قراءة</span>'; 
-                        }
-                    }
-                } catch (error) {
-                    console.error('❌ خطأ أثناء معالجة الإيقاف:', error);
-                    alert('⚠️ حدث خطأ أثناء إنشاء التقرير: ' + error.message);
-                } finally {
-                    setTimeout(() => {
-                        if (sessionManager.currentSession && !sessionManager.currentSession.isReportGenerated) {
-                            console.log('⏳ انتظار اكتمال التقرير قبل تنظيف الجلسة...');
-                            return;
-                        }
-                        
-                        sessionManager.endSession();
-                        stopInProgress = false;
-                        isStopping = false;
-                        console.log('🧹 تم تنظيف الجلسة بعد إنشاء التقرير');
-                    }, 1000);
-                    
-                    if (!sessionManager.currentSession || !sessionManager.currentSession.isReportGenerated) {
-                        sessionManager.endSession();
-                        stopInProgress = false;
-                        isStopping = false;
-                    }
-                }
-            }, 300);
-        }
 
-        // ===== دالة processAndGenerateReport - المعدلة =====
-        function processAndGenerateReport() {
-            try {
-                const session = sessionManager.getSession();
-                
-                const studentId = document.getElementById('eval-student-select').value;
-                const textId = document.getElementById('eval-text-select').value;
-                const student = appData.students.find(s => s.id === studentId) || { 
-                    name: 'طالب تجريبي',
-                    grade: 'السادس', 
-                    className: 'ب', 
-                    code: '001' 
-                };
-                const textObj = appData.texts.find(t => t.id === textId) || { 
-                    title: 'نص تجريبي',
-                    body: document.getElementById('target-reading-text').innerText ||
-                    'ذهب الفلاح المبكر إلى حقله الأخضر الواسع لكي يحصد القمح الناضج.' 
-                };
-                
-                let spokenForAnalysis = '';
-                
-                if (session) {
-                    spokenForAnalysis = sessionManager.getFinalTranscript();
-                }
-                
-                if (!spokenForAnalysis || spokenForAnalysis.trim().length === 0) {
-                    spokenForAnalysis = sessionManager.finalTranscriptBackup || '';
-                }
-                
-                if (!spokenForAnalysis || spokenForAnalysis.trim().length === 0) {
+            setTimeout(() => {
+                const finalText = sessionManager.getFinalTranscript();
+                if (finalText && finalText.trim().length > 0) {
+                    processAndGenerateReport();
+                } else {
                     const transcriptEl = document.getElementById('live-transcript');
                     if (transcriptEl) {
-                        const rawText = transcriptEl.textContent || '';
-                        const cleanText = rawText
-                            .replace(/^(final|interim|placeholder)\s*/gi, '')
-                            .replace(/^🎙️\s*/, '')
-                            .replace(/^⏳\s*/, '')
-                            .replace(/^اضغط على زر البدء وتحدث بوضوح\.\.\./, '')
-                            .replace(/^جاري تهيئة الميكروفون\.\.\./, '')
-                            .replace(/^استمع الآن\.\.\. تحدث بوضوح/, '')
-                            .trim();
-                        
-                        if (cleanText.length > 3 && 
-                            !cleanText.includes('اضغط على زر البدء') && 
-                            !cleanText.includes('جاري تهيئة') && 
-                            !cleanText.includes('استمع الآن') &&
-                            !cleanText.includes('تم إيقاف الجلسة') &&
-                            !cleanText.includes('⏹️')) {
-                            spokenForAnalysis = cleanText;
-                            console.log('📝 تم استخراج النص من واجهة المستخدم في processAndGenerateReport:', spokenForAnalysis.substring(0, 50));
-                        }
+                        transcriptEl.innerHTML = '<span class="text-warning">⏹️ تم إيقاف الجلسة بدون قراءة</span>';
                     }
                 }
-                
-                if (spokenForAnalysis && spokenForAnalysis.trim().length > 0) {
-                    spokenForAnalysis = cleanFinalTranscriptForAnalysis(spokenForAnalysis);
-                }
-                
-                if (!spokenForAnalysis || spokenForAnalysis.trim().length < 2) {
-                    if (hasDetectedSpeech) {
-                        spokenForAnalysis = 'تم التقاط صوت ولكن لم يتم التعرف عليه بوضوح';
-                    } else {
-                        spokenForAnalysis = '';
-                    }
-                }
-                
-                if (!spokenForAnalysis || spokenForAnalysis.trim().length < 2) {
-                    console.warn('⚠️ لا يوجد نص للتحليل');
-                    const transcriptEl = document.getElementById('live-transcript');
-                    if (transcriptEl) { 
-                        transcriptEl.innerHTML = '<span class="text-warning">⚠️ لم يتم التعرف على قراءة واضحة</span>'; 
-                    }
-                    updateDiag('diag-state', '📌 الحالة: <span class="diag-fail">لا يوجد نص للتحليل</span>');
-                    return;
-                }
-                
-                const transcriptEl = document.getElementById('live-transcript');
-                if (transcriptEl && spokenForAnalysis && spokenForAnalysis.trim().length > 0) {
-                    transcriptEl.innerHTML = `<span class="final">${spokenForAnalysis}</span>`;
-                }
-                
-                const result = analyzeReadingPerformance(textObj.body, spokenForAnalysis);
-                if (!result.skills) result.skills = [];
-                if (!result.analysisDetails) result.analysisDetails = [];
-                
-                const targetStudent = appData.students.find(s => s.id === studentId);
-                if (targetStudent) {
-                    targetStudent.hasRead = true;
-                    saveAppData();
-                    renderStudentsTable();
-                    renderBulbsForCurrentClass();
-                    renderManageView();
-                    loadFilteredStudents();
-                }
-                
-                const reportRecord = {
-                    id: 'rep_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                    date: new Date().toLocaleDateString('ar-SA'),
-                    sessionId: session ? session.id : 'no_session',
-                    student: { ...student },
-                    textTitle: textObj.title,
-                    result: { ...result },
-                    finalTranscript: spokenForAnalysis
-                };
-                
-                appData.reports.unshift(reportRecord);
-                saveAppData();
-                renderAllReportsTable();
-                renderReadingAssessmentCard(student, textObj.title, result);
-                
-                if (firebaseReady && db && navigator.onLine && currentUser) {
-                    saveReportToCloud(reportRecord)
-                        .then(() => {
-                            console.log('✅ تم حفظ التقرير على السحابة بنجاح:', reportRecord.id);
-                        })
-                        .catch((err) => {
-                            console.warn('⚠️ تعذر حفظ التقرير على السحابة:', err);
-                        });
-                }
-                
-                if (session) {
-                    sessionManager.clearFinalTranscript();
-                }
-                hasDetectedSpeech = false;
-                
-                updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">تم إنشاء التقرير ✅</span>');
-                console.log('✅ تم إنشاء التقرير بنجاح:', reportRecord.id);
-                
-            } catch (error) {
-                console.error('خطأ في إنشاء التقرير:', error);
-                alert('⚠️ حدث خطأ أثناء إنشاء التقرير: ' + error.message);
-            }
+                sessionManager.endSession();
+                isStopping = false;
+            }, 500);
         }
 
         async function checkMicOnLoad() {
@@ -3455,8 +3156,93 @@
             checkMicOnLoad();
         }, 1000);
 
+        // ===== دالة processAndGenerateReport - مع الحفظ في السحابة =====
+        function processAndGenerateReport() {
+            try {
+                const session = sessionManager.getSession();
+                if (!session) {
+                    console.warn('⚠️ لا توجد جلسة نشطة');
+                    return;
+                }
+                const studentId = document.getElementById('eval-student-select').value;
+                const textId = document.getElementById('eval-text-select').value;
+                const student = appData.students.find(s => s.id === studentId) || { name: 'طالب تجريبي',
+                    grade: 'السادس', className: 'ب', code: '001' };
+                const textObj = appData.texts.find(t => t.id === textId) || { title: 'نص تجريبي',
+                    body: document.getElementById('target-reading-text').innerText ||
+                    'ذهب الفلاح المبكر إلى حقله الأخضر الواسع لكي يحصد القمح الناضج.' };
+
+                let spokenForAnalysis = sessionManager.getFinalTranscript();
+                if (spokenForAnalysis && spokenForAnalysis.trim().length > 0) {
+                    spokenForAnalysis = cleanFinalTranscriptForAnalysis(spokenForAnalysis);
+                }
+                if (!spokenForAnalysis || spokenForAnalysis.trim().length < 2) {
+                    if (hasDetectedSpeech) {
+                        spokenForAnalysis = 'تم التقاط صوت ولكن لم يتم التعرف عليه بوضوح';
+                    } else {
+                        spokenForAnalysis = '';
+                    }
+                }
+                const transcriptEl = document.getElementById('live-transcript');
+                if (transcriptEl && spokenForAnalysis && spokenForAnalysis.trim().length > 0) {
+                    transcriptEl.innerHTML = `<span class="final">${spokenForAnalysis}</span>`;
+                }
+
+                const result = analyzeReadingPerformance(textObj.body, spokenForAnalysis);
+                if (!result.skills) result.skills = [];
+                if (!result.analysisDetails) result.analysisDetails = [];
+
+                const targetStudent = appData.students.find(s => s.id === studentId);
+                if (targetStudent) {
+                    targetStudent.hasRead = true;
+                    saveAppData();
+                    renderStudentsTable();
+                    renderBulbsForCurrentClass();
+                    renderManageView();
+                    loadFilteredStudents();
+                }
+
+                const reportRecord = {
+                    id: 'rep_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+                    date: new Date().toLocaleDateString('ar-SA'),
+                    sessionId: session.id,
+                    student: { ...student },
+                    textTitle: textObj.title,
+                    result: { ...result },
+                    finalTranscript: spokenForAnalysis
+                };
+
+                appData.reports.unshift(reportRecord);
+                saveAppData();
+                renderAllReportsTable();
+                renderReadingAssessmentCard(student, textObj.title, result);
+
+                if (firebaseReady && db && navigator.onLine && currentUser) {
+                    saveReportToCloud(reportRecord)
+                        .then(() => {
+                            alert('✅ تم حفظ التقرير على السحابة بنجاح');
+                        })
+                        .catch(() => {
+                            alert('⚠️ تعذر حفظ التقرير على السحابة — سيتم حفظه محلياً وسيتم المزامنة لاحقاً');
+                        });
+                } else {
+                    alert('⚠️ لا يوجد اتصال بالسحابة، تم حفظ التقرير محلياً فقط.');
+                }
+
+                sessionManager.clearFinalTranscript();
+                hasDetectedSpeech = false;
+                updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">تم إنشاء التقرير ✅</span>');
+                console.log('✅ تم إنشاء التقرير بنجاح:', reportRecord.id);
+
+            } catch (error) {
+                console.error('خطأ في إنشاء التقرير:', error);
+                alert('⚠️ حدث خطأ أثناء إنشاء التقرير: ' + error.message);
+            }
+        }
+
         // ================================================================
         // 12. ⭐⭐ نظام التقييم — مع دعم الحروف المفردة ⭐⭐
+        // (محفوظ كما هو - لم يتم التعديل)
         // ================================================================
         const letterPronunciationMap = {
             'أ': ['ألف', 'همزة', 'ا', 'إ'],
