@@ -17,7 +17,7 @@
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js">
     </script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js">
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js">
     </script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js">
     </script>
@@ -1106,7 +1106,7 @@
         };
 
         // ================================================================
-        // 2. FIREBASE CONFIG & SYNC - النسخة الأصلية التي كانت تعمل
+        // 2. FIREBASE CONFIG - Realtime Database
         // ================================================================
         const firebaseConfig = {
             apiKey: "AIzaSyA-ibqutaDJ1-xTBGIqwJYHqRFFxc_fbPI",
@@ -1125,6 +1125,8 @@
         let currentUser = null;
         let isSyncing = false;
         let listenersStarted = false;
+        let authRetryCount = 0;
+        const MAX_AUTH_RETRIES = 5;
 
         function initFirebase() {
             try {
@@ -1136,49 +1138,58 @@
                 
                 if (!firebase.apps.length) {
                     firebase.initializeApp(firebaseConfig);
-                    console.log('✅ Firebase initialized');
+                    console.log('✅ Firebase initialized with Realtime Database');
                 }
                 
                 auth = firebase.auth();
-                db = firebase.firestore();
-                
-                db.enablePersistence({ synchronizeTabs: true })
-                    .catch((err) => {
-                        console.warn('⚠️ Firestore persistence error:', err);
-                    });
+                db = firebase.database();
                 
                 auth.onAuthStateChanged((user) => {
                     if (user) {
                         currentUser = user;
                         firebaseReady = true;
                         updateSyncStatus(true);
+                        console.log('✅ Firebase ready - User:', user.uid);
+                        
                         if (!listenersStarted) {
                             startFirebaseListeners();
                             listenersStarted = true;
                         }
-                        console.log('✅ Firebase ready - User:', user.uid);
                         if (!window._cloudLoaded) {
                             window._cloudLoaded = true;
                             loadFromCloud();
                         }
                     } else {
+                        console.log('🔄 No user, signing in anonymously...');
                         signInAnonymously();
                     }
+                }, (error) => {
+                    console.error('❌ Auth state change error:', error);
+                    firebaseReady = false;
+                    updateSyncStatus(false);
                 });
                 
                 window.addEventListener('online', () => {
+                    console.log('🔄 Online event detected');
                     if (db) {
-                        db.enableNetwork()
-                            .then(() => updateSyncStatus(true))
-                            .catch(() => updateSyncStatus(false));
+                        if (!currentUser) {
+                            signInAnonymously();
+                        }
+                        loadFromCloud();
                     }
                 });
                 
-                window.addEventListener('offline', () => updateSyncStatus(false));
+                window.addEventListener('offline', () => {
+                    console.log('📶 Offline event detected');
+                    updateSyncStatus(false);
+                });
                 
                 setInterval(() => {
-                    if (navigator.onLine && db && firebaseReady) {
-                        db.enableNetwork().catch(() => {});
+                    if (navigator.onLine && db && !firebaseReady) {
+                        console.log('🔄 Retrying Firebase connection...');
+                        if (!currentUser) {
+                            signInAnonymously();
+                        }
                     }
                 }, 15000);
                 
@@ -1192,14 +1203,29 @@
             }
         }
 
-        function signInAnonymously(retries = 5) {
-            if (!auth) return;
+        function signInAnonymously() {
+            if (!auth) {
+                console.warn('⚠️ Auth not initialized');
+                return;
+            }
+            
+            if (authRetryCount >= MAX_AUTH_RETRIES) {
+                console.warn('⚠️ Max auth retries reached');
+                firebaseReady = false;
+                updateSyncStatus(false);
+                return;
+            }
+            
+            console.log(`🔄 Attempting anonymous sign in (${authRetryCount + 1}/${MAX_AUTH_RETRIES})...`);
             
             auth.signInAnonymously()
                 .then((userCred) => {
                     currentUser = userCred.user;
                     firebaseReady = true;
+                    authRetryCount = 0;
                     updateSyncStatus(true);
+                    console.log('✅ Signed in anonymously:', currentUser.uid);
+                    
                     if (!listenersStarted) {
                         startFirebaseListeners();
                         listenersStarted = true;
@@ -1208,12 +1234,23 @@
                         window._cloudLoaded = true;
                         loadFromCloud();
                     }
-                    console.log('✅ Signed in anonymously:', currentUser.uid);
                 })
                 .catch((err) => {
-                    console.error('❌ Sign in error:', err);
-                    if (retries > 0 && (err.code === 'auth/network-request-failed' || err.code === 'auth/internal-error')) {
-                        setTimeout(() => signInAnonymously(retries - 1), 3000);
+                    console.error('❌ Sign in error:', err.code, err.message);
+                    authRetryCount++;
+                    
+                    if (err.code === 'auth/network-request-failed' || 
+                        err.code === 'auth/internal-error' ||
+                        err.code === 'auth/too-many-requests') {
+                        if (authRetryCount < MAX_AUTH_RETRIES) {
+                            const delay = Math.min(3000 * authRetryCount, 15000);
+                            console.log(`⏳ Retrying in ${delay/1000} seconds...`);
+                            setTimeout(() => signInAnonymously(), delay);
+                        } else {
+                            firebaseReady = false;
+                            updateSyncStatus(false);
+                            console.error('❌ Max auth retries exceeded');
+                        }
                     } else {
                         firebaseReady = false;
                         updateSyncStatus(false);
@@ -1225,12 +1262,22 @@
             const el = document.getElementById('syncStatus');
             if (!el) return;
             
-            if (online && navigator.onLine && firebaseReady) {
+            if (online && navigator.onLine && firebaseReady && currentUser) {
                 el.className = 'sync-status online';
                 el.innerHTML = '☁️ متصل';
+                el.title = 'متصل بالسحابة';
+            } else if (online && navigator.onLine && firebaseReady) {
+                el.className = 'sync-status online';
+                el.innerHTML = '☁️ متصل (جاري المصادقة...)';
+                el.title = 'جاري المصادقة مع السحابة';
+            } else if (navigator.onLine && !firebaseReady) {
+                el.className = 'sync-status offline';
+                el.innerHTML = '🔄 جاري الاتصال...';
+                el.title = 'جاري الاتصال بالسحابة';
             } else {
                 el.className = 'sync-status offline';
                 el.innerHTML = '📶 غير متصل (مخزّن محلياً)';
+                el.title = 'غير متصل بالسحابة - البيانات مخزنة محلياً';
             }
         }
 
@@ -1238,87 +1285,146 @@
             if (!firebaseReady || listenersStarted || !db) return;
             
             listenersStarted = true;
-            console.log('🔄 Starting Firebase listeners...');
+            console.log('🔄 Starting Firebase Realtime Database listeners...');
             
-            db.collection('students')
-                .onSnapshot((snapshot) => {
-                    if (isSyncing || !snapshot) return;
-                    
-                    snapshot.docChanges().forEach((change) => {
-                        const doc = change.doc;
-                        const id = doc.id;
-                        const data = doc.data();
-                        
-                        if (!data) return;
-                        if (!data.name || !data.grade || !data.className) {
-                            console.warn('⚠️ Skipping incomplete student data:', data);
-                            return;
-                        }
-                        
-                        if (change.type === 'added' || change.type === 'modified') {
-                            const idx = appData.students.findIndex(s => s.id === id);
-                            
-                            if (idx !== -1) {
-                                Object.keys(data).forEach(k => {
-                                    if (k !== 'reports' && k !== 'readingAttempts') {
-                                        appData.students[idx][k] = data[k];
-                                    }
-                                });
-                                if (data.hasRead !== undefined) {
-                                    appData.students[idx].hasRead = data.hasRead;
-                                }
-                            } else {
-                                const ns = {
-                                    id: id,
-                                    ...data,
-                                    hasRead: data.hasRead || false
-                                };
-                                if (!ns.reports) ns.reports = [];
-                                if (!ns.readingAttempts) ns.readingAttempts = [];
-                                appData.students.push(ns);
-                            }
-                        } else if (change.type === 'removed') {
-                            appData.students = appData.students.filter(s => s.id !== id);
+            // مستمع للطلاب
+            const studentsRef = db.ref('students');
+            studentsRef.on('value', (snapshot) => {
+                if (isSyncing) return;
+                
+                const data = snapshot.val();
+                if (!data) return;
+                
+                const newStudents = [];
+                Object.keys(data).forEach(id => {
+                    const studentData = data[id];
+                    if (studentData && studentData.name && studentData.grade && studentData.className) {
+                        newStudents.push({
+                            id: id,
+                            ...studentData,
+                            hasRead: studentData.hasRead || false
+                        });
+                    }
+                });
+                
+                appData.students = newStudents;
+                saveAppDataLocally();
+                renderStudentsTable();
+                renderBulbsForCurrentClass();
+                renderManageView();
+                loadFilteredStudents();
+                updateHomeStats();
+                localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
+                updateSyncStatus(true);
+                
+            }, (error) => {
+                console.warn('⚠️ Realtime Database student listener error:', error);
+                updateSyncStatus(false);
+            });
+            
+            // مستمع للتقارير
+            const reportsRef = db.ref('reports');
+            reportsRef.on('value', (snapshot) => {
+                if (isSyncing) return;
+                
+                const data = snapshot.val();
+                if (!data) return;
+                
+                const newReports = [];
+                Object.keys(data).forEach(id => {
+                    const reportData = data[id];
+                    if (reportData) {
+                        newReports.push({
+                            id: id,
+                            ...reportData
+                        });
+                    }
+                });
+                
+                newReports.sort((a, b) => new Date(b.date) - new Date(a.date));
+                appData.reports = newReports;
+                renderAllReportsTable();
+                renderSupportList();
+                saveAppDataLocally();
+                
+            }, (error) => {
+                console.warn('⚠️ Realtime Database reports listener error:', error);
+            });
+        }
+
+        // ===== حفظ التقرير في Realtime Database =====
+        function saveReportToCloud(report) {
+            if (!firebaseReady || !db || !currentUser || !navigator.onLine) {
+                console.warn('⚠️ Cannot save report to cloud - offline or not ready');
+                return Promise.reject('offline');
+            }
+            
+            console.log('📤 Saving report to cloud:', report.id);
+            
+            const reportData = { ...report };
+            delete reportData.id;
+            
+            return db.ref('reports/' + report.id)
+                .set(reportData)
+                .then(() => {
+                    console.log('✅ Report saved to cloud:', report.id);
+                    return true;
+                })
+                .catch((err) => {
+                    console.error('❌ Error saving report:', err);
+                    return Promise.reject(err);
+                });
+        }
+
+        // ===== تحميل التقارير من Realtime Database =====
+        async function loadReportsFromCloud() {
+            if (!firebaseReady || !db || !navigator.onLine || !currentUser) {
+                console.warn('⚠️ Cannot load reports - offline or not authenticated');
+                return;
+            }
+            
+            try {
+                console.log('🔄 Loading reports from cloud...');
+                const snapshot = await db.ref('reports').once('value');
+                const data = snapshot.val();
+                
+                if (data) {
+                    const newReports = [];
+                    Object.keys(data).forEach(id => {
+                        const reportData = data[id];
+                        if (reportData) {
+                            newReports.push({
+                                id: id,
+                                ...reportData
+                            });
                         }
                     });
-                    
+                    newReports.sort((a, b) => new Date(b.date) - new Date(a.date));
+                    appData.reports = newReports;
+                    renderAllReportsTable();
+                    renderSupportList();
                     saveAppDataLocally();
-                    renderStudentsTable();
-                    renderBulbsForCurrentClass();
-                    renderManageView();
-                    loadFilteredStudents();
-                    updateHomeStats();
-                    localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
-                    updateSyncStatus(true);
-                    
-                }, (error) => {
-                    console.warn('⚠️ Firestore listener error:', error);
-                    updateSyncStatus(false);
-                    
-                    setTimeout(() => {
-                        if (db && navigator.onLine) {
-                            db.enableNetwork()
-                                .then(() => updateSyncStatus(true))
-                                .catch(() => {});
-                        }
-                    }, 5000);
-                });
+                    console.log('✅ Reports loaded from cloud');
+                }
+            } catch (e) {
+                console.error('❌ loadReportsFromCloud error:', e);
+                throw e;
+            }
         }
 
         function saveToCloud(collection, docId, data, merge = true) {
             if (!firebaseReady || !db || !currentUser || !navigator.onLine) {
-                console.warn('⚠️ Cannot save to cloud - offline or not ready');
+                console.warn('⚠️ Cannot save to cloud - offline or not authenticated');
                 return Promise.reject('offline');
             }
             
             if (!data.name || !data.grade || !data.className) {
-                console.warn('⚠️ Skipping student with incomplete data:', data);
+                console.warn('⚠️ Skipping incomplete student data:', data);
                 return Promise.reject('بيانات ناقصة');
             }
             
-            return db.collection(collection)
-                .doc(docId)
-                .set(data, { merge })
+            return db.ref(collection + '/' + docId)
+                .set(data)
                 .catch((err) => {
                     console.error('❌ Error saving to cloud:', err);
                     return Promise.reject(err);
@@ -1326,46 +1432,33 @@
         }
 
         async function loadFromCloud() {
-            if (!firebaseReady || !db || !navigator.onLine) {
-                console.warn('⚠️ Cannot load from cloud - offline or not ready');
+            if (!firebaseReady || !db || !navigator.onLine || !currentUser) {
+                console.warn('⚠️ Cannot load from cloud - offline or not authenticated');
                 return;
             }
             
             try {
                 console.log('🔄 Loading data from cloud...');
-                const snapshot = await db.collection('students').get();
                 
-                snapshot.forEach(doc => {
-                    const id = doc.id;
-                    const data = doc.data();
-                    
-                    if (!data.name || !data.grade || !data.className) {
-                        console.warn('⚠️ Skipping incomplete student data:', data);
-                        return;
-                    }
-                    
-                    const idx = appData.students.findIndex(s => s.id === id);
-                    
-                    if (idx !== -1) {
-                        Object.keys(data).forEach(k => {
-                            if (k !== 'reports' && k !== 'readingAttempts') {
-                                appData.students[idx][k] = data[k];
-                            }
-                        });
-                        if (data.hasRead !== undefined) {
-                            appData.students[idx].hasRead = data.hasRead;
+                const studentsSnapshot = await db.ref('students').once('value');
+                const studentsData = studentsSnapshot.val();
+                
+                if (studentsData) {
+                    const newStudents = [];
+                    Object.keys(studentsData).forEach(id => {
+                        const data = studentsData[id];
+                        if (data && data.name && data.grade && data.className) {
+                            newStudents.push({
+                                id: id,
+                                ...data,
+                                hasRead: data.hasRead || false
+                            });
                         }
-                    } else {
-                        const ns = {
-                            id: id,
-                            ...data,
-                            hasRead: data.hasRead || false
-                        };
-                        if (!ns.reports) ns.reports = [];
-                        if (!ns.readingAttempts) ns.readingAttempts = [];
-                        appData.students.push(ns);
-                    }
-                });
+                    });
+                    appData.students = newStudents;
+                }
+                
+                await loadReportsFromCloud();
                 
                 localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
                 
@@ -1390,7 +1483,13 @@
                 return;
             }
             
-            if (appData.students.length === 0) {
+            if (!currentUser) {
+                alert('⚠️ جاري المصادقة مع السحابة... انتظر قليلاً ثم حاول مرة أخرى.');
+                signInAnonymously();
+                return;
+            }
+            
+            if (appData.students.length === 0 && appData.reports.length === 0) {
                 alert('⚠️ لا توجد بيانات لحفظها');
                 return;
             }
@@ -1400,11 +1499,7 @@
             let savedCount = 0;
             
             appData.students.forEach(s => {
-                if (!s.name || !s.grade || !s.className) {
-                    console.warn('⚠️ Skipping student with incomplete data:', s);
-                    return;
-                }
-                
+                if (!s.name || !s.grade || !s.className) return;
                 const d = {
                     name: s.name,
                     grade: s.grade,
@@ -1413,23 +1508,25 @@
                     hasRead: s.hasRead || false,
                     updatedAt: new Date().toISOString()
                 };
-                
                 promises.push(
                     saveToCloud('students', s.id, d)
-                        .then(() => {
-                            savedCount++;
-                            console.log('✅ Saved student:', s.name);
-                        })
-                        .catch((err) => {
-                            console.error('❌ Failed to save student:', s.name, err);
-                        })
+                        .then(() => { savedCount++; })
+                        .catch((err) => console.error('❌ Failed to save student:', s.name, err))
+                );
+            });
+            
+            appData.reports.forEach(r => {
+                promises.push(
+                    saveReportToCloud(r)
+                        .then(() => { savedCount++; })
+                        .catch((err) => console.error('❌ Failed to save report:', r.id, err))
                 );
             });
             
             Promise.all(promises)
                 .then(() => {
                     isSyncing = false;
-                    alert(`✅ تم الحفظ في السحابة (${savedCount} طالب)`);
+                    alert(`✅ تم الحفظ في السحابة (${savedCount} عنصر)`);
                     loadFromCloud();
                 })
                 .catch(() => {
@@ -1439,30 +1536,29 @@
         }
 
         // ================================================================
-        // 3. CORE FUNCTIONS (مع الحفظ في السحابة) — محفوظة كما كانت
+        // 3. CORE FUNCTIONS (مع الحفظ في السحابة)
         // ================================================================
-        function saveAppDataLocally() { 
-            localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData)); 
+        function saveAppDataLocally() {
+            localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
         }
 
         function saveAppData() {
             saveAppDataLocally();
-            // الحفظ في السحابة يتم بنفس الطريقة القديمة
             if (firebaseReady && db && navigator.onLine) {
                 appData.students.forEach(s => {
-                    if (!s.name || !s.grade || !s.className) {
-                        console.warn('تخطي حفظ طالب غير مكتمل:', s);
-                        return;
-                    }
-                    const d = { 
-                        name: s.name, 
-                        grade: s.grade, 
-                        className: s.className, 
+                    if (!s.name || !s.grade || !s.className) return;
+                    const d = {
+                        name: s.name,
+                        grade: s.grade,
+                        className: s.className,
                         code: s.code || '—',
-                        hasRead: s.hasRead || false, 
-                        updatedAt: new Date().toISOString() 
+                        hasRead: s.hasRead || false,
+                        updatedAt: new Date().toISOString()
                     };
                     saveToCloud('students', s.id, d).catch(() => {});
+                });
+                appData.reports.forEach(r => {
+                    saveReportToCloud(r).catch(() => {});
                 });
             }
             updateHomeStats();
@@ -1478,18 +1574,14 @@
 
         function loadAppData() {
             const saved = localStorage.getItem('reading_platform_full_data_v16');
-            if (saved) { 
-                try { 
-                    appData = JSON.parse(saved); 
-                } catch (e) {}
+            if (saved) {
+                try { appData = JSON.parse(saved); } catch (e) {}
             }
             if (!appData.classes) appData.classes = [];
             if (!appData.students) appData.students = [];
             if (!appData.texts) appData.texts = [];
             if (!appData.reports) appData.reports = [];
-            appData.students.forEach(s => { 
-                if (s.hasRead === undefined) s.hasRead = false; 
-            });
+            appData.students.forEach(s => { if (s.hasRead === undefined) s.hasRead = false; });
             updateHomeStats();
             renderStudentsTable();
             renderClassesTable();
@@ -1503,9 +1595,9 @@
             renderManageView();
             loadFilteredStudents();
             renderSupportList();
-            if (firebaseReady && !window._cloudLoaded) { 
+            if (firebaseReady && !window._cloudLoaded) {
                 window._cloudLoaded = true;
-                loadFromCloud(); 
+                loadFromCloud();
             }
         }
 
@@ -1517,14 +1609,18 @@
             const links = document.querySelectorAll('.sidebar .nav-link');
             links.forEach(link => {
                 const txt = link.textContent.trim();
-                if ((tabId === 'home' && txt.includes('الرئيسية')) || (tabId === 'students' && txt.includes(
-                        'الطلاب')) || (tabId === 'classes' && txt.includes('الفصول')) || (tabId ===
-                        'manage' && txt.includes('إدارة')) || (tabId === 'texts' && txt.includes(
-                    'نصوص')) || (tabId === 'corrector' && txt.includes('المصحح')) || (tabId ===
-                        'reports' && txt.includes('سجلات')) || (tabId === 'support' && txt.includes(
-                        'الدعم')) || (tabId === 'import_export' && txt.includes(
-                        'استيراد')) || (tabId === 'settings' && txt.includes('الإعدادات'))) { link
-                        .classList.add('active'); }
+                if ((tabId === 'home' && txt.includes('الرئيسية')) ||
+                    (tabId === 'students' && txt.includes('الطلاب')) ||
+                    (tabId === 'classes' && txt.includes('الفصول')) ||
+                    (tabId === 'manage' && txt.includes('إدارة')) ||
+                    (tabId === 'texts' && txt.includes('نصوص')) ||
+                    (tabId === 'corrector' && txt.includes('المصحح')) ||
+                    (tabId === 'reports' && txt.includes('سجلات')) ||
+                    (tabId === 'support' && txt.includes('الدعم')) ||
+                    (tabId === 'import_export' && txt.includes('استيراد')) ||
+                    (tabId === 'settings' && txt.includes('الإعدادات'))) {
+                    link.classList.add('active');
+                }
             });
             if (tabId === 'corrector') { renderBulbsForCurrentClass();
                 updateClassFilterIndicator(); }
@@ -1577,8 +1673,11 @@
             const ids = appData.students.filter(s => s.className === classObj.name).map(s => s.id);
             appData.classes = appData.classes.filter(c => c.id !== classId);
             appData.students = appData.students.filter(s => s.className !== classObj.name);
-            if (firebaseReady && db && navigator.onLine) ids.forEach(id => { db.collection('students').doc(id).delete()
-                    .catch(() => {}); });
+            if (firebaseReady && db && navigator.onLine) {
+                ids.forEach(id => {
+                    db.ref('students/' + id).remove().catch(() => {});
+                });
+            }
             saveAppData();
             renderClassesTable();
             renderStudentsTable();
@@ -1597,8 +1696,11 @@
             const ids = appData.students.map(s => s.id);
             appData.classes = [];
             appData.students = [];
-            if (firebaseReady && db && navigator.onLine) ids.forEach(id => { db.collection('students').doc(id).delete()
-                    .catch(() => {}); });
+            if (firebaseReady && db && navigator.onLine) {
+                ids.forEach(id => {
+                    db.ref('students/' + id).remove().catch(() => {});
+                });
+            }
             saveAppData();
             renderClassesTable();
             renderStudentsTable();
@@ -1647,7 +1749,9 @@
             if (!student) return;
             appData.students = appData.students.filter(s => s.id !== id);
             saveAppData();
-            if (firebaseReady && db && navigator.onLine) db.collection('students').doc(id).delete().catch(() => {});
+            if (firebaseReady && db && navigator.onLine) {
+                db.ref('students/' + id).remove().catch(() => {});
+            }
             renderStudentsTable();
             renderBulbsForCurrentClass();
             renderManageView();
@@ -1660,8 +1764,11 @@
             const ids = appData.students.map(s => s.id);
             appData.students = [];
             saveAppData();
-            if (firebaseReady && db && navigator.onLine) ids.forEach(id => { db.collection('students').doc(id).delete()
-                    .catch(() => {}); });
+            if (firebaseReady && db && navigator.onLine) {
+                ids.forEach(id => {
+                    db.ref('students/' + id).remove().catch(() => {});
+                });
+            }
             renderStudentsTable();
             renderClassesTable();
             updateEvalClasses();
@@ -2068,7 +2175,7 @@
         }
 
         // ================================================================
-        // 11. ⭐⭐ محرك القراءة الصوتية - إعادة كتابة كاملة ⭐⭐
+        // 11. ⭐⭐ محرك القراءة الصوتية - مع منع التكرار ⭐⭐
         // ================================================================
 
         // ===== إدارة الجلسات =====
@@ -2081,7 +2188,6 @@
 
             createSession(studentId, textId) {
                 this.endSession();
-                
                 this.sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
                 this.currentSession = {
                     id: this.sessionId,
@@ -2100,16 +2206,14 @@
                     analyser: null,
                     animationFrame: null,
                     restartAttempts: 0,
-                    maxRestartAttempts: 3
+                    maxRestartAttempts: 3,
+                    lastAddedText: ''
                 };
-                
                 console.log('📌 تم إنشاء جلسة جديدة:', this.sessionId);
                 return this.currentSession;
             }
 
-            getSession() {
-                return this.currentSession;
-            }
+            getSession() { return this.currentSession; }
 
             isSessionActive() {
                 return this.currentSession && this.currentSession.isActive && !this.currentSession.isEnding;
@@ -2120,7 +2224,6 @@
                     console.log('📌 إنهاء الجلسة:', this.currentSession.id);
                     this.currentSession.isEnding = true;
                     this.currentSession.isActive = false;
-                    
                     if (this.currentSession.recognitionInstance) {
                         try {
                             this.currentSession.recognitionInstance.onresult = null;
@@ -2129,31 +2232,21 @@
                             this.currentSession.recognitionInstance.onstart = null;
                             this.currentSession.recognitionInstance.abort();
                             this.currentSession.recognitionInstance.stop();
-                        } catch(e) {}
+                        } catch (e) {}
                         this.currentSession.recognitionInstance = null;
                     }
-                    
                     if (this.currentSession.mediaStream) {
-                        try {
-                            this.currentSession.mediaStream.getTracks().forEach(t => t.stop());
-                        } catch(e) {}
+                        try { this.currentSession.mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
                         this.currentSession.mediaStream = null;
                     }
-                    
                     if (this.currentSession.audioContext) {
-                        try {
-                            this.currentSession.audioContext.close();
-                        } catch(e) {}
+                        try { this.currentSession.audioContext.close(); } catch (e) {}
                         this.currentSession.audioContext = null;
                     }
-                    
                     if (this.currentSession.animationFrame) {
-                        try {
-                            cancelAnimationFrame(this.currentSession.animationFrame);
-                        } catch(e) {}
+                        try { cancelAnimationFrame(this.currentSession.animationFrame); } catch (e) {}
                         this.currentSession.animationFrame = null;
                     }
-                    
                     this.currentSession = null;
                     this.sessionId = null;
                 }
@@ -2172,21 +2265,29 @@
             addFinalText(text) {
                 if (!this.currentSession) return false;
                 if (!text || text.trim().length === 0) return false;
-                
                 const cleanText = text.trim();
                 const currentText = this.currentSession.finalTranscript;
-                
-                if (currentText.includes(cleanText)) {
-                    console.log('⏭️ تم تجاهل نص مكرر:', cleanText);
+                const lastAdded = this.currentSession.lastAddedText;
+
+                if (currentText.includes(cleanText) && cleanText.length < currentText.length) {
+                    console.log('⏭️ تجاهل نص مكرر:', cleanText);
                     return false;
                 }
-                
+                if (lastAdded === cleanText) {
+                    console.log('⏭️ تجاهل نص مكرر (مطابق لآخر نص):', cleanText);
+                    return false;
+                }
+                if (lastAdded && lastAdded.includes(cleanText) && cleanText.length < lastAdded.length) {
+                    console.log('⏭️ تجاهل نص أقصر من النص السابق:', cleanText);
+                    return false;
+                }
+
                 if (currentText.length > 0) {
                     this.currentSession.finalTranscript += ' ' + cleanText;
                 } else {
                     this.currentSession.finalTranscript = cleanText;
                 }
-                
+                this.currentSession.lastAddedText = cleanText;
                 this.currentSession.hasFinalResult = true;
                 console.log('✅ تم إضافة نص جديد:', cleanText);
                 return true;
@@ -2201,6 +2302,7 @@
                     this.currentSession.finalTranscript = '';
                     this.currentSession.hasFinalResult = false;
                     this.currentSession.processedIndices = new Set();
+                    this.currentSession.lastAddedText = '';
                 }
             }
 
@@ -2232,7 +2334,6 @@
         let isFirstStart = true;
         let isRestarting = false;
 
-        // ===== التحقق من دعم التعرف الصوتي =====
         function checkSpeechRecognitionSupport() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (SpeechRecognition) {
@@ -2243,15 +2344,14 @@
             return false;
         }
 
-        // ===== التحقق من صلاحية الميكروفون =====
         async function checkMicrophonePermission() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { 
-                        echoCancellation: true, 
-                        noiseSuppression: true, 
-                        autoGainControl: true 
-                    } 
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
                 });
                 stream.getTracks().forEach(track => track.stop());
                 micPermissionStatus = 'granted';
@@ -2274,73 +2374,30 @@
             }
         }
 
-        // ===== عرض رسائل تنبيه =====
         function showMicrophoneAlert(status, errorMsg = '') {
             let message = '';
-            
             if (status === 'permanently denied' || status === 'denied') {
-                message = `🔴 لم يتم منح صلاحية الميكروفون بشكل دائم.
-
-📱 لتفعيل الميكروفون على Android (Chrome):
-
-الطريقة الأولى (الأسرع):
-1. اضغط على 🔒 أو 🔓 بجانب الرابط في شريط العنوان
-2. اختر "إعدادات الموقع" (Site Settings)
-3. ابحث عن "الميكروفون" واختر "السماح" (Allow)
-4. أعد تحميل الصفحة (Refresh)
-
-الطريقة الثانية:
-1. اذهب إلى إعدادات الهاتف > التطبيقات > Chrome
-2. اختر "الصلاحيات" (Permissions)
-3. اضغط على "الميكروفون" واختر "السماح" (Allow)
-
-🔄 بعد التفعيل، اضغط على زر "بدء القراءة" مرة أخرى.`;
+                message = `🔴 لم يتم منح صلاحية الميكروفون بشكل دائم. لتفعيله: اضغط على 🔒 بجانب الرابط، اختر إعدادات الموقع، ابحث عن الميكروفون واختر السماح، ثم أعد تحميل الصفحة.`;
             } else if (status === 'prompt') {
-                message = `🎙️ يرجى السماح باستخدام الميكروفون.
-
-عند ظهور النافذة المنبثقة، اختر "سماح" (Allow).
-
-❓ إذا لم تظهر النافذة:
-• اضغط على زر "بدء القراءة" مرة أخرى
-• تأكد من عدم وجود مانع إعلانات
-• تأكد من أن الموقع يعمل عبر HTTPS`;
+                message = `🎙️ يرجى السماح باستخدام الميكروفون. عند ظهور النافذة، اختر "سماح".`;
             } else if (status === 'not-available') {
-                message = `🔴 لم يتم العثور على ميكروفون في جهازك.
-
-تأكد من:
-• وجود ميكروفون متصل بالجهاز
-• عدم وجود تطبيق آخر يستخدم الميكروفون
-• إعادة تشغيل المتصفح`;
+                message = `🔴 لم يتم العثور على ميكروفون في جهازك.`;
             } else if (status === 'not-supported') {
-                message = `🔴 متصفحك لا يدعم التعرف الصوتي.
-
-استخدم أحد المتصفحات التالية:
-• Google Chrome (الإصدار 70 أو أحدث)
-• Samsung Internet (الإصدار 14 أو أحدث)`;
+                message = `🔴 متصفحك لا يدعم التعرف الصوتي. استخدم Chrome أو Samsung Internet.`;
             } else if (status === 'security') {
-                message = `🔒 يتطلب الميكروفون اتصالاً آمناً (HTTPS).
-
-⚠️ الموقع يعمل عبر HTTP، وهذا غير آمن للميكروفون.
-
-🔄 استخدم الرابط: https://...`;
+                message = `🔒 يتطلب الميكروفون اتصالاً آمناً (HTTPS).`;
             } else if (status === 'error') {
-                message = `❌ حدث خطأ في الميكروفون:\n\n${errorMsg}\n\nحاول:\n• إعادة تحميل الصفحة\n• إغلاق التطبيقات التي تستخدم الميكروفون`;
+                message = `❌ حدث خطأ في الميكروفون:\n${errorMsg}`;
             } else {
-                message = `⚠️ يرجى السماح باستخدام الميكروفون.
-
-عند ظهور نافذة صلاحية المتصفح، اختر "سماح" (Allow).`;
+                message = `⚠️ يرجى السماح باستخدام الميكروفون.`;
             }
-            
             alert(message);
         }
 
-        // ===== تنظيف النص من التكرارات =====
         function cleanRepeatedText(text) {
             if (!text || text.trim().length === 0) return '';
-            
             let words = text.split(/\s+/).filter(w => w.length > 0);
             if (words.length === 0) return '';
-            
             let uniqueWords = [];
             let prevWord = '';
             for (let i = 0; i < words.length; i++) {
@@ -2350,44 +2407,33 @@
                     prevWord = currentWord;
                 }
             }
-            
             return uniqueWords.join(' ');
         }
 
-        // ===== تصفية النصوص غير الصحيحة =====
         function filterInvalidTranscript(text) {
             if (!text || text.trim().length === 0) return '';
-            
             const invalidPhrases = [
                 'الحمد', 'توصيات', 'حالة الطلاب', 'الرئيسية', 'طلاب', 'الفصل',
                 'اختر الطالب', 'اختر النص', 'بدء القراءة', 'إيقاف', 'عرض البطاقة',
                 'الميكروفون', 'الصوت', 'التعرف', 'الاستماع', 'تحديث', 'حفظ'
             ];
-            
             let cleanedText = text;
             for (let phrase of invalidPhrases) {
                 const regex = new RegExp(phrase, 'gi');
                 cleanedText = cleanedText.replace(regex, '');
             }
-            
             cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
-            
             if (cleanedText.length === 0 && text.length > 3) {
                 return text.trim();
             }
-            
             return cleanedText;
         }
 
-        // ===== التنظيف النهائي للنص قبل التقرير =====
         function cleanFinalTranscriptForAnalysis(transcript) {
             if (!transcript || transcript.trim().length === 0) return '';
-            
             let cleaned = cleanRepeatedText(transcript);
-            
             let words = cleaned.split(/\s+/).filter(w => w.length > 0);
             if (words.length === 0) return '';
-            
             let finalWords = [];
             for (let i = 0; i < words.length; i++) {
                 const word = words[i];
@@ -2402,7 +2448,6 @@
                 }
                 finalWords.push(word);
             }
-            
             let uniqueWords = [];
             let prevWord = '';
             for (let i = 0; i < finalWords.length; i++) {
@@ -2411,11 +2456,9 @@
                     prevWord = finalWords[i];
                 }
             }
-            
             return uniqueWords.join(' ');
         }
 
-        // ===== دوال مساعدة =====
         function toggleDiagnostic() {
             diagVisible = !diagVisible;
             document.getElementById('diagnostic-panel').style.display = diagVisible ? 'block' : 'none';
@@ -2430,11 +2473,9 @@
             document.getElementById('diag-text-content').textContent = text || '—';
         }
 
-        // ===== دوال مراقبة الصوت =====
         function startVolumeMonitoring(stream) {
             const session = sessionManager.getSession();
             if (!session) return;
-            
             try {
                 session.mediaStream = stream;
                 session.audioContext = new(window.AudioContext || window.webkitAudioContext)();
@@ -2450,38 +2491,36 @@
                 updateDiag('diag-mic', '🟢 الميكروفون: <span class="diag-ok">مفتوح</span>');
                 updateDiag('diag-permission', '🟢 الإذن: <span class="diag-ok">ممنوح</span>');
                 const activityEl = document.getElementById('audio-activity-status');
-                if (activityEl) { 
+                if (activityEl) {
                     activityEl.textContent = '✅ جاهز للاستماع — تحدث بوضوح';
-                    activityEl.className = 'text-success small'; 
+                    activityEl.className = 'text-success small';
                 }
-            } catch (e) { 
+            } catch (e) {
                 console.warn('Volume monitoring error:', e);
-                updateDiag('diag-mic', '🔴 الميكروفون: <span class="diag-fail">خطأ</span>'); 
+                updateDiag('diag-mic', '🔴 الميكروفون: <span class="diag-fail">خطأ</span>');
             }
         }
 
         function monitorVolumeLoop() {
             const session = sessionManager.getSession();
-            if (!session || !session.isActive) { 
+            if (!session || !session.isActive) {
                 if (session && session.animationFrame) {
                     cancelAnimationFrame(session.animationFrame);
                     session.animationFrame = null;
                 }
-                return; 
+                return;
             }
-            
             try {
                 if (!session.analyser) {
                     session.animationFrame = requestAnimationFrame(monitorVolumeLoop);
                     return;
                 }
-                
                 const dataArray = new Uint8Array(session.analyser.fftSize);
                 session.analyser.getByteTimeDomainData(dataArray);
                 let sum = 0;
-                for (let i = 0; i < dataArray.length; i++) { 
+                for (let i = 0; i < dataArray.length; i++) {
                     const val = (dataArray[i] - 128) / 128;
-                    sum += val * val; 
+                    sum += val * val;
                 }
                 const rms = Math.sqrt(sum / dataArray.length);
                 const db = 20 * Math.log10(rms + 0.0001);
@@ -2489,95 +2528,81 @@
                 if (percent < 0) percent = 0;
                 document.getElementById('volume-bar').style.width = percent + '%';
                 document.getElementById('volume-percent').textContent = Math.round(percent) + '%';
-                
                 if (percent > 1.5) {
                     hasDetectedSpeech = true;
                     const activityEl = document.getElementById('audio-activity-status');
-                    if (activityEl) { 
+                    if (activityEl) {
                         activityEl.textContent = '🗣️ يتم التقاط الصوت';
-                        activityEl.className = 'text-success small'; 
+                        activityEl.className = 'text-success small';
                     }
                 }
-                
-                if (session.isActive) { 
-                    session.animationFrame = requestAnimationFrame(monitorVolumeLoop); 
-                } else { 
-                    if (session.animationFrame) { 
+                if (session.isActive) {
+                    session.animationFrame = requestAnimationFrame(monitorVolumeLoop);
+                } else {
+                    if (session.animationFrame) {
                         cancelAnimationFrame(session.animationFrame);
-                        session.animationFrame = null; 
-                    } 
+                        session.animationFrame = null;
+                    }
                 }
-            } catch (e) { 
-                if (session && session.isActive) { 
-                    session.animationFrame = requestAnimationFrame(monitorVolumeLoop); 
-                } 
+            } catch (e) {
+                if (session && session.isActive) {
+                    session.animationFrame = requestAnimationFrame(monitorVolumeLoop);
+                }
             }
         }
 
-        // ===== دالة startReadingSession =====
         async function startReadingSession() {
             const studentId = document.getElementById('eval-student-select').value;
             const textId = document.getElementById('eval-text-select').value;
-            
-            if (!studentId || !textId) { 
-                alert('⚠️ يرجى اختيار الطالب والنص المستهدف أولاً'); 
-                return; 
+            if (!studentId || !textId) {
+                alert('⚠️ يرجى اختيار الطالب والنص المستهدف أولاً');
+                return;
             }
-            
             if (sessionManager.isSessionActive()) {
                 console.log('⚠️ جلسة نشطة موجودة، يتم إنهاؤها...');
                 sessionManager.endSession();
             }
-            
             const session = sessionManager.createSession(studentId, textId);
-            
             if (!checkSpeechRecognitionSupport()) {
                 showMicrophoneAlert('not-supported');
                 sessionManager.endSession();
                 return;
             }
-            
             if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
                 showMicrophoneAlert('security');
                 sessionManager.endSession();
                 return;
             }
-            
+
             const transcriptEl = document.getElementById('live-transcript');
-            if (transcriptEl) { 
-                transcriptEl.innerHTML = '<span class="interim">⏳ جاري تهيئة الميكروفون...</span>'; 
+            if (transcriptEl) {
+                transcriptEl.innerHTML = '<span class="interim">⏳ جاري تهيئة الميكروفون...</span>';
             }
-            
             const statusEl = document.getElementById('mic-status-indicator');
-            if (statusEl) { 
+            if (statusEl) {
                 statusEl.textContent = '⏳ جاري طلب الصلاحية...';
-                statusEl.className = 'badge bg-warning mic-status-badge px-3 py-2'; 
+                statusEl.className = 'badge bg-warning mic-status-badge px-3 py-2';
             }
-            
             const activityEl = document.getElementById('audio-activity-status');
-            if (activityEl) { 
+            if (activityEl) {
                 activityEl.textContent = '🔄 جاري التحقق من صلاحية الميكروفون...';
-                activityEl.className = 'text-muted small'; 
+                activityEl.className = 'text-muted small';
             }
-            
             updateDiag('diag-state', '📌 الحالة: <span class="diag-warn">جاري التحقق من الصلاحية...</span>');
             updateDiag('diag-recognition', '🔴 التعرف: <span class="diag-warn">جاري التحقق...</span>');
-            
+
             try {
                 const permCheck = await checkMicrophonePermission();
-                
                 if (permCheck.status === 'permanently denied' || permCheck.status === 'denied') {
                     showMicrophoneAlert('permanently denied');
                     sessionManager.endSession();
                     return;
                 }
-                
                 if (permCheck.status === 'prompt') {
                     if (isMobileDevice && isFirstStart) {
                         alert('🎙️ سيطلب المتصفح الإذن لاستخدام الميكروفون.\n\nعند ظهور النافذة، اختر "سماح" (Allow).');
                         isFirstStart = false;
                     }
-                    
                     try {
                         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                         stream.getTracks().forEach(track => track.stop());
@@ -2594,7 +2619,6 @@
                         }
                     }
                 }
-                
                 if (permCheck.status === 'unknown' || permCheck.status === 'error') {
                     try {
                         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -2612,16 +2636,15 @@
                         return;
                     }
                 }
-                
                 micPermissionStatus = 'granted';
                 updateDiag('diag-permission', '🟢 الإذن: <span class="diag-ok">ممنوح</span>');
-                
+
                 let stream;
                 try {
                     stream = await navigator.mediaDevices.getUserMedia({
-                        audio: { 
-                            echoCancellation: true, 
-                            noiseSuppression: true, 
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
                             autoGainControl: true,
                             sampleRate: 44100,
                             channelCount: 1
@@ -2642,100 +2665,84 @@
                         return;
                     }
                 }
-                
                 if (!stream) {
                     showMicrophoneAlert('error', 'لم يتم الحصول على تدفق الصوت');
                     sessionManager.endSession();
                     return;
                 }
-                
                 startVolumeMonitoring(stream);
                 updateDiag('diag-mic', '🟢 الميكروفون: <span class="diag-ok">مفتوح</span>');
-                
+
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (!SpeechRecognition) {
                     showMicrophoneAlert('not-supported');
                     sessionManager.endSession();
                     return;
                 }
-                
                 const rec = new SpeechRecognition();
                 rec.lang = 'ar-SA';
                 rec.continuous = true;
                 rec.interimResults = true;
                 rec.maxAlternatives = 1;
-                
                 if (isMobileDevice) {
                     rec.continuous = true;
                     rec.interimResults = true;
                 }
-                
                 session.recognitionInstance = rec;
-                
+
                 rec.onstart = function() {
                     console.log('✅ SpeechRecognition onstart');
                     session.isActive = true;
                     isListening = true;
                     sessionActive = true;
                     hasDetectedSpeech = false;
-                    
                     sessionManager.clearFinalTranscript();
-                    
                     const transcriptEl2 = document.getElementById('live-transcript');
-                    if (transcriptEl2) { 
-                        transcriptEl2.innerHTML = '<span class="interim">🎙️ استمع الآن... تحدث بوضوح</span>'; 
+                    if (transcriptEl2) {
+                        transcriptEl2.innerHTML = '<span class="interim">🎙️ استمع الآن... تحدث بوضوح</span>';
                     }
-                    
                     const statusEl2 = document.getElementById('mic-status-indicator');
-                    if (statusEl2) { 
+                    if (statusEl2) {
                         statusEl2.textContent = '🎤 جاري التعرف على الصوت';
-                        statusEl2.className = 'badge bg-success mic-status-badge px-3 py-2'; 
+                        statusEl2.className = 'badge bg-success mic-status-badge px-3 py-2';
                     }
-                    
                     const startBtn = document.getElementById('start-btn');
                     const stopBtn = document.getElementById('stop-btn');
                     if (startBtn) startBtn.disabled = true;
                     if (stopBtn) stopBtn.disabled = false;
-                    
                     const activityEl2 = document.getElementById('audio-activity-status');
-                    if (activityEl2) { 
+                    if (activityEl2) {
                         activityEl2.textContent = '🎙️ استمع الآن... تحدث بوضوح';
-                        activityEl2.className = 'text-primary small'; 
+                        activityEl2.className = 'text-primary small';
                     }
-                    
                     updateDiag('diag-recognition', '🟢 التعرف: <span class="diag-ok">بدأ</span>');
                     updateDiag('diag-onstart', '🟢 onstart: <span class="diag-ok">تم التشغيل ✅</span>');
                     updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">جاري الاستماع</span>');
                 };
-                
+
                 rec.onresult = function(event) {
                     if (!sessionManager.isSessionActive()) {
                         console.log('⚠️ تجاهل النتيجة - الجلسة غير نشطة');
                         return;
                     }
-                    
                     if (session.isEnding) {
                         console.log('⚠️ تجاهل النتيجة - الجلسة في حالة إنهاء');
                         return;
                     }
-                    
+
                     const startIndex = event.resultIndex;
                     const endIndex = event.results.length;
-                    
-                    console.log(`📝 معالجة النتائج من ${startIndex} إلى ${endIndex}`);
-                    
+
                     let interimText = '';
                     let finalText = '';
-                    
+
                     for (let i = startIndex; i < endIndex; i++) {
                         if (sessionManager.isResultProcessed(i)) {
-                            console.log(`⏭️ نتيجة ${i} تمت معالجتها مسبقاً، تم التخطي`);
+                            console.log(`⏭️ نتيجة ${i} تمت معالجتها مسبقاً`);
                             continue;
                         }
-                        
                         const result = event.results[i];
                         const transcript = result[0].transcript.trim();
-                        
                         if (result.isFinal) {
                             finalText += transcript + ' ';
                             sessionManager.markResultProcessed(i);
@@ -2745,81 +2752,70 @@
                             console.log(`🔄 نتيجة مؤقتة ${i}:`, transcript);
                         }
                     }
-                    
+
                     const transcriptEl2 = document.getElementById('live-transcript');
                     if (!transcriptEl2) return;
-                    
+
                     const filteredFinal = filterInvalidTranscript(finalText);
                     const filteredInterim = filterInvalidTranscript(interimText);
-                    
+
                     if (filteredFinal && filteredFinal.trim().length > 0) {
                         const cleanFinal = cleanRepeatedText(filteredFinal.trim());
-                        const currentTranscript = sessionManager.getFinalTranscript();
-                        
-                        if (!currentTranscript.includes(cleanFinal)) {
-                            const added = sessionManager.addFinalText(cleanFinal);
-                            
-                            if (added) {
-                                const fullText = sessionManager.getFinalTranscript();
-                                transcriptEl2.innerHTML = 
-                                    `<span class="final">${fullText}</span>${filteredInterim ? ' <span class="interim">' + filteredInterim + '</span>' : ''}`;
-                                transcriptEl2.scrollTop = transcriptEl2.scrollHeight;
-                                setDiagText(fullText);
-                                updateDiag('diag-onresult', '🟢 onresult: <span class="diag-ok">تم استقبال النص ✅</span>');
-                                updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">يتم التعرف على الكلام</span>');
-                                hasDetectedSpeech = true;
-                            }
-                        } else {
-                            console.log('⏭️ تم تجاهل النص المكرر:', cleanFinal);
+                        const added = sessionManager.addFinalText(cleanFinal);
+                        if (added) {
+                            const fullText = sessionManager.getFinalTranscript();
+                            transcriptEl2.innerHTML =
+                                `<span class="final">${fullText}</span>${filteredInterim ? ' <span class="interim">' + filteredInterim + '</span>' : ''}`;
+                            transcriptEl2.scrollTop = transcriptEl2.scrollHeight;
+                            setDiagText(fullText);
+                            updateDiag('diag-onresult', '🟢 onresult: <span class="diag-ok">تم استقبال النص ✅</span>');
+                            updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">يتم التعرف على الكلام</span>');
+                            hasDetectedSpeech = true;
                         }
-                    } 
-                    
+                    }
+
                     if (filteredInterim && filteredInterim.trim().length > 0) {
                         const cleanInterim = cleanRepeatedText(filteredInterim.trim());
                         const fullText = sessionManager.getFinalTranscript();
-                        transcriptEl2.innerHTML = 
+                        transcriptEl2.innerHTML =
                             `${fullText ? '<span class="final">' + fullText + '</span> ' : ''}<span class="interim">${cleanInterim}</span>`;
                         transcriptEl2.scrollTop = transcriptEl2.scrollHeight;
                         setDiagText(fullText || cleanInterim);
-                        if (cleanInterim.length > 2) { 
-                            hasDetectedSpeech = true; 
+                        if (cleanInterim.length > 2) {
+                            hasDetectedSpeech = true;
                         }
                     }
-                    
+
                     if (filteredFinal || (filteredInterim && filteredInterim.length > 2)) {
                         const activityEl2 = document.getElementById('audio-activity-status');
-                        if (activityEl2) { 
+                        if (activityEl2) {
                             activityEl2.textContent = '🗣️ قراءة قيد الالتقاط';
-                            activityEl2.className = 'text-success small'; 
+                            activityEl2.className = 'text-success small';
                         }
                     }
                 };
-                
+
                 rec.onerror = function(event) {
                     console.warn('⚠️ SpeechRecognition error:', event.error);
-                    
                     if (session.isEnding) {
                         console.log('⏭️ تجاهل الخطأ - الجلسة في حالة إنهاء');
                         return;
                     }
-                    
                     if (event.error === 'not-allowed') {
                         showMicrophoneAlert('permanently denied');
                         sessionManager.endSession();
                         return;
                     }
-                    
                     if (event.error === 'no-speech') {
                         if (session.isActive) {
                             const activityEl2 = document.getElementById('audio-activity-status');
-                            if (activityEl2) { 
+                            if (activityEl2) {
                                 activityEl2.textContent = '⏳ لم يتم اكتشاف صوت، حاول التحدث';
-                                activityEl2.className = 'text-warning small'; 
+                                activityEl2.className = 'text-warning small';
                             }
                         }
                         return;
                     }
-                    
                     if (event.error === 'audio-capture' || event.error === 'aborted') {
                         if (!session.isEnding) {
                             const activityEl2 = document.getElementById('audio-activity-status');
@@ -2828,12 +2824,10 @@
                                 activityEl2.className = 'text-danger small';
                             }
                             updateDiag('diag-state', '📌 الحالة: <span class="diag-fail">خطأ في الميكروفون</span>');
-                            
                             if (!isRestarting && session.isActive && sessionManager.canRestart()) {
                                 isRestarting = true;
                                 sessionManager.incrementRestartAttempts();
                                 console.log(`🔄 محاولة إعادة تشغيل التعرف (${session.restartAttempts}/${session.maxRestartAttempts})...`);
-                                
                                 setTimeout(() => {
                                     try {
                                         if (session.recognitionInstance && session.isActive && !session.isEnding) {
@@ -2841,12 +2835,10 @@
                                             session.recognitionInstance.onerror = null;
                                             session.recognitionInstance.onend = null;
                                             session.recognitionInstance.onstart = null;
-                                            
                                             session.recognitionInstance.onresult = rec.onresult;
                                             session.recognitionInstance.onerror = rec.onerror;
                                             session.recognitionInstance.onend = rec.onend;
                                             session.recognitionInstance.onstart = rec.onstart;
-                                            
                                             session.recognitionInstance.stop();
                                             setTimeout(() => {
                                                 try {
@@ -2859,41 +2851,33 @@
                                                             activityEl3.className = 'text-warning small';
                                                         }
                                                     }
-                                                } catch(e) {
-                                                    console.warn('⚠️ فشل إعادة بدء التعرف:', e);
-                                                }
+                                                } catch (e) { console.warn('⚠️ فشل إعادة بدء التعرف:', e); }
                                             }, 300);
                                         }
-                                    } catch(e) {
-                                        console.warn('⚠️ فشل إعادة تشغيل التعرف:', e);
-                                    }
+                                    } catch (e) { console.warn('⚠️ فشل إعادة تشغيل التعرف:', e); }
                                     isRestarting = false;
                                 }, 1000);
                             }
                         }
                         return;
                     }
-                    
                     if (event.error !== 'no-speech' && !session.isEnding) {
                         updateDiag('diag-state', '📌 الحالة: <span class="diag-fail">خطأ: ' + event.error + '</span>');
                     }
                 };
-                
+
                 rec.onend = function() {
                     console.log('🔚 SpeechRecognition onend');
                     session.isActive = false;
                     isListening = false;
                     sessionActive = false;
-                    
                     if (session.isEnding) {
                         console.log('✅ الجلسة انتهت بشكل طبيعي');
                         return;
                     }
-                    
                     if (!session.isEnding && sessionManager.getSession() && sessionManager.canRestart()) {
                         console.log(`🔄 محاولة إعادة تشغيل التعرف (${session.restartAttempts + 1}/${session.maxRestartAttempts})...`);
                         sessionManager.incrementRestartAttempts();
-                        
                         setTimeout(() => {
                             try {
                                 if (session.recognitionInstance && !session.isEnding && !isRestarting) {
@@ -2905,32 +2889,28 @@
                                         activityEl3.className = 'text-warning small';
                                     }
                                 }
-                            } catch(e) {
-                                console.warn('⚠️ فشل إعادة تشغيل التعرف:', e);
-                            }
+                            } catch (e) { console.warn('⚠️ فشل إعادة تشغيل التعرف:', e); }
                         }, 500);
                     }
-                    
                     const finalText = sessionManager.getFinalTranscript();
                     if (finalText && finalText.trim().length > 0) {
                         const statusEl2 = document.getElementById('mic-status-indicator');
-                        if (statusEl2) { 
+                        if (statusEl2) {
                             statusEl2.textContent = '⏹️ انتهت القراءة';
-                            statusEl2.className = 'badge bg-secondary mic-status-badge px-3 py-2'; 
+                            statusEl2.className = 'badge bg-secondary mic-status-badge px-3 py-2';
                         }
                     }
                 };
-                
+
                 recognition = rec;
                 updateDiag('diag-recognition', '🟢 التعرف: <span class="diag-ok">تم التهيئة</span>');
-                
                 const delay = isMobileDevice ? 500 : 200;
-                setTimeout(() => { 
-                    try { 
+                setTimeout(() => {
+                    try {
                         rec.start();
                         updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">جاري بدء التعرف...</span>');
-                        console.log('✅ تم استدعاء rec.start()'); 
-                    } catch (e) { 
+                        console.log('✅ تم استدعاء rec.start()');
+                    } catch (e) {
                         console.error('❌ فشل بدء التعرف:', e);
                         if (e.name === 'NotAllowedError' || e.name === 'SecurityError') {
                             showMicrophoneAlert('permanently denied');
@@ -2954,12 +2934,10 @@
                             alert('⚠️ حدث خطأ في بدء التعرف الصوتي: ' + e.message);
                             sessionManager.endSession();
                         }
-                    } 
+                    }
                 }, delay);
-                
             } catch (err) {
                 console.error('❌ خطأ الميكروفون:', err);
-                
                 if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
                     showMicrophoneAlert('permanently denied');
                 } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
@@ -2973,18 +2951,15 @@
             }
         }
 
-        // ===== دالة stopReadingSession =====
         function stopReadingSession() {
             const session = sessionManager.getSession();
-            if (!session || !session.isActive) { 
-                alert('⚠️ لا توجد جلسة قراءة نشطة.'); 
-                return; 
+            if (!session || !session.isActive) {
+                alert('⚠️ لا توجد جلسة قراءة نشطة.');
+                return;
             }
-            
             console.log('⏹️ بدء إيقاف الجلسة يدوياً');
             session.isEnding = true;
             isStopping = true;
-            
             if (session.recognitionInstance) {
                 try {
                     session.recognitionInstance.onresult = null;
@@ -2993,85 +2968,64 @@
                     session.recognitionInstance.onstart = null;
                     session.recognitionInstance.stop();
                     console.log('✅ تم إيقاف التعرف');
-                } catch (e) {
-                    console.warn('⚠️ خطأ أثناء إيقاف التعرف:', e);
-                }
+                } catch (e) { console.warn('⚠️ خطأ أثناء إيقاف التعرف:', e); }
             }
-            
             if (session.animationFrame) {
-                try {
-                    cancelAnimationFrame(session.animationFrame);
-                } catch(e) {}
+                try { cancelAnimationFrame(session.animationFrame); } catch (e) {}
                 session.animationFrame = null;
             }
-            
             if (session.analyser) {
-                try {
-                    session.analyser.disconnect();
-                } catch(e) {}
+                try { session.analyser.disconnect(); } catch (e) {}
                 session.analyser = null;
             }
-            
             if (session.audioContext && session.audioContext.state !== 'closed') {
-                try {
-                    session.audioContext.close();
-                } catch(e) {}
+                try { session.audioContext.close(); } catch (e) {}
                 session.audioContext = null;
             }
-            
             if (session.mediaStream) {
-                try {
-                    session.mediaStream.getTracks().forEach(t => t.stop());
-                } catch(e) {}
+                try { session.mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
                 session.mediaStream = null;
             }
-            
             session.isActive = false;
             isListening = false;
             sessionActive = false;
-            
+
             const statusEl = document.getElementById('mic-status-indicator');
-            if (statusEl) { 
+            if (statusEl) {
                 statusEl.textContent = '⏹️ تم الإيقاف';
-                statusEl.className = 'badge bg-secondary mic-status-badge px-3 py-2'; 
+                statusEl.className = 'badge bg-secondary mic-status-badge px-3 py-2';
             }
-            
             const startBtn = document.getElementById('start-btn');
             const stopBtn = document.getElementById('stop-btn');
             if (startBtn) startBtn.disabled = false;
             if (stopBtn) stopBtn.disabled = true;
-            
             const activityEl = document.getElementById('audio-activity-status');
-            if (activityEl) { 
+            if (activityEl) {
                 activityEl.textContent = '⏹️ تم إيقاف الجلسة';
-                activityEl.className = 'text-muted small'; 
+                activityEl.className = 'text-muted small';
             }
-            
             updateDiag('diag-state', '📌 الحالة: <span class="diag-info">جاري إنشاء التقرير...</span>');
-            
-            setTimeout(() => { 
+
+            setTimeout(() => {
                 const finalText = sessionManager.getFinalTranscript();
                 if (finalText && finalText.trim().length > 0) {
                     processAndGenerateReport();
                 } else {
                     const transcriptEl = document.getElementById('live-transcript');
-                    if (transcriptEl) { 
-                        transcriptEl.innerHTML = '<span class="text-warning">⏹️ تم إيقاف الجلسة بدون قراءة</span>'; 
+                    if (transcriptEl) {
+                        transcriptEl.innerHTML = '<span class="text-warning">⏹️ تم إيقاف الجلسة بدون قراءة</span>';
                     }
                 }
-                
                 sessionManager.endSession();
                 isStopping = false;
             }, 500);
         }
 
-        // ===== التحقق من الصلاحية عند تحميل الصفحة =====
         async function checkMicOnLoad() {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 console.warn('⚠️ getUserMedia غير مدعوم');
                 return;
             }
-            
             try {
                 const permCheck = await checkMicrophonePermission();
                 if (permCheck.status === 'granted') {
@@ -3094,16 +3048,14 @@
                     micPermissionStatus = 'prompt';
                     console.log('⏳ صلاحية الميكروفون في انتظار الطلب');
                 }
-            } catch (e) {
-                console.warn('⚠️ فشل التحقق من الصلاحية:', e);
-            }
+            } catch (e) { console.warn('⚠️ فشل التحقق من الصلاحية:', e); }
         }
 
         setTimeout(() => {
             checkMicOnLoad();
         }, 1000);
 
-        // ===== دالة processAndGenerateReport - مع فصل Firebase =====
+        // ===== دالة processAndGenerateReport - مع الحفظ في السحابة =====
         function processAndGenerateReport() {
             try {
                 const session = sessionManager.getSession();
@@ -3111,7 +3063,6 @@
                     console.warn('⚠️ لا توجد جلسة نشطة');
                     return;
                 }
-                
                 const studentId = document.getElementById('eval-student-select').value;
                 const textId = document.getElementById('eval-text-select').value;
                 const student = appData.students.find(s => s.id === studentId) || { name: 'طالب تجريبي',
@@ -3119,13 +3070,11 @@
                 const textObj = appData.texts.find(t => t.id === textId) || { title: 'نص تجريبي',
                     body: document.getElementById('target-reading-text').innerText ||
                     'ذهب الفلاح المبكر إلى حقله الأخضر الواسع لكي يحصد القمح الناضج.' };
-                
+
                 let spokenForAnalysis = sessionManager.getFinalTranscript();
-                
                 if (spokenForAnalysis && spokenForAnalysis.trim().length > 0) {
                     spokenForAnalysis = cleanFinalTranscriptForAnalysis(spokenForAnalysis);
                 }
-                
                 if (!spokenForAnalysis || spokenForAnalysis.trim().length < 2) {
                     if (hasDetectedSpeech) {
                         spokenForAnalysis = 'تم التقاط صوت ولكن لم يتم التعرف عليه بوضوح';
@@ -3133,18 +3082,15 @@
                         spokenForAnalysis = '';
                     }
                 }
-                
                 const transcriptEl = document.getElementById('live-transcript');
                 if (transcriptEl && spokenForAnalysis && spokenForAnalysis.trim().length > 0) {
                     transcriptEl.innerHTML = `<span class="final">${spokenForAnalysis}</span>`;
                 }
-                
-                // ===== تحليل القراءة =====
+
                 const result = analyzeReadingPerformance(textObj.body, spokenForAnalysis);
                 if (!result.skills) result.skills = [];
                 if (!result.analysisDetails) result.analysisDetails = [];
-                
-                // تحديث حالة الطالب
+
                 const targetStudent = appData.students.find(s => s.id === studentId);
                 if (targetStudent) {
                     targetStudent.hasRead = true;
@@ -3154,10 +3100,9 @@
                     renderManageView();
                     loadFilteredStudents();
                 }
-                
-                // ===== إنشاء التقرير =====
+
                 const reportRecord = {
-                    id: 'rep_' + Date.now(),
+                    id: 'rep_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
                     date: new Date().toLocaleDateString('ar-SA'),
                     sessionId: session.id,
                     student: { ...student },
@@ -3165,18 +3110,29 @@
                     result: { ...result },
                     finalTranscript: spokenForAnalysis
                 };
-                
+
                 appData.reports.unshift(reportRecord);
                 saveAppData();
                 renderAllReportsTable();
                 renderReadingAssessmentCard(student, textObj.title, result);
-                
+
+                if (firebaseReady && db && navigator.onLine && currentUser) {
+                    saveReportToCloud(reportRecord)
+                        .then(() => {
+                            alert('✅ تم حفظ التقرير على السحابة بنجاح');
+                        })
+                        .catch(() => {
+                            alert('⚠️ تعذر حفظ التقرير على السحابة — سيتم حفظه محلياً وسيتم المزامنة لاحقاً');
+                        });
+                } else {
+                    alert('⚠️ لا يوجد اتصال بالسحابة، تم حفظ التقرير محلياً فقط.');
+                }
+
                 sessionManager.clearFinalTranscript();
                 hasDetectedSpeech = false;
-                
                 updateDiag('diag-state', '📌 الحالة: <span class="diag-ok">تم إنشاء التقرير ✅</span>');
                 console.log('✅ تم إنشاء التقرير بنجاح:', reportRecord.id);
-                
+
             } catch (error) {
                 console.error('خطأ في إنشاء التقرير:', error);
                 alert('⚠️ حدث خطأ أثناء إنشاء التقرير: ' + error.message);
@@ -3184,7 +3140,7 @@
         }
 
         // ================================================================
-        // 12. ⭐⭐ نظام التقييم — مع دعم الحروف المفردة (محفوظ) ⭐⭐
+        // 12. ⭐⭐ نظام التقييم — مع دعم الحروف المفردة ⭐⭐
         // ================================================================
         const letterPronunciationMap = {
             'أ': ['ألف', 'همزة', 'ا', 'إ'],
@@ -4863,6 +4819,5 @@
                 renderSupportList(); }, 300);
         };
     </script>
-
 </body>
 </html>
