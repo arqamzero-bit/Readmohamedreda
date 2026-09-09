@@ -1022,7 +1022,7 @@
                     <div id="report-output-container"></div>
                 </div>
 
-                <!-- REPORTS - تم إضافة أزرار الحذف هنا -->
+                <!-- REPORTS - تم إضافة أزرار الحذف -->
                 <div id="section-reports" class="tab-section">
                     <div class="card p-4 mb-4 bg-white">
                         <h4 class="fw-bold text-primary mb-3">📊 سجلات القراءات والبطاقات المحفوظة</h4>
@@ -1297,11 +1297,9 @@
             // مستمع للطلاب
             const studentsRef = db.ref('students');
             studentsRef.on('value', (snapshot) => {
-                if (isSyncing) return; // تجاهل التغييرات أثناء الحفظ
-                
+                if (isSyncing) return;
                 const data = snapshot.val();
                 if (!data) return;
-                
                 const newStudents = [];
                 Object.keys(data).forEach(id => {
                     const studentData = data[id];
@@ -1313,7 +1311,6 @@
                         });
                     }
                 });
-                
                 appData.students = newStudents;
                 saveAppDataLocally();
                 renderStudentsTable();
@@ -1323,7 +1320,6 @@
                 updateHomeStats();
                 localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
                 updateSyncStatus(true);
-                
             }, (error) => {
                 console.warn('⚠️ Realtime Database student listener error:', error);
                 updateSyncStatus(false);
@@ -1332,11 +1328,9 @@
             // مستمع للتقارير
             const reportsRef = db.ref('reports');
             reportsRef.on('value', (snapshot) => {
-                if (isSyncing) return; // تجاهل التغييرات أثناء الحفظ
-                
+                if (isSyncing) return;
                 const data = snapshot.val();
                 if (!data) return;
-                
                 const newReports = [];
                 Object.keys(data).forEach(id => {
                     const reportData = data[id];
@@ -1347,15 +1341,37 @@
                         });
                     }
                 });
-                
                 newReports.sort((a, b) => new Date(b.date) - new Date(a.date));
                 appData.reports = newReports;
                 renderAllReportsTable();
                 renderSupportList();
                 saveAppDataLocally();
-                
             }, (error) => {
                 console.warn('⚠️ Realtime Database reports listener error:', error);
+            });
+            
+            // ===== مستمع للنصوص (جديد) =====
+            const textsRef = db.ref('texts');
+            textsRef.on('value', (snapshot) => {
+                if (isSyncing) return;
+                const data = snapshot.val();
+                if (!data) return;
+                const newTexts = [];
+                Object.keys(data).forEach(id => {
+                    const textData = data[id];
+                    if (textData && textData.title && textData.body) {
+                        newTexts.push({
+                            id: id,
+                            ...textData
+                        });
+                    }
+                });
+                appData.texts = newTexts;
+                renderTextsTable();
+                updateEvalTextDropdown();
+                saveAppDataLocally();
+            }, (error) => {
+                console.warn('⚠️ Realtime Database texts listener error:', error);
             });
         }
 
@@ -1365,12 +1381,9 @@
                 console.warn('⚠️ Cannot save report to cloud - offline or not ready');
                 return Promise.reject('offline');
             }
-            
             console.log('📤 Saving report to cloud:', report.id);
-            
             const reportData = { ...report };
             delete reportData.id;
-            
             return db.ref('reports/' + report.id)
                 .set(reportData)
                 .then(() => {
@@ -1389,12 +1402,10 @@
                 console.warn('⚠️ Cannot load reports - offline or not authenticated');
                 return;
             }
-            
             try {
                 console.log('🔄 Loading reports from cloud...');
                 const snapshot = await db.ref('reports').once('value');
                 const data = snapshot.val();
-                
                 if (data) {
                     const newReports = [];
                     Object.keys(data).forEach(id => {
@@ -1424,16 +1435,27 @@
                 console.warn('⚠️ Cannot save to cloud - offline or not authenticated');
                 return Promise.reject('offline');
             }
-            
             if (!data.name || !data.grade || !data.className) {
                 console.warn('⚠️ Skipping incomplete student data:', data);
                 return Promise.reject('بيانات ناقصة');
             }
-            
             return db.ref(collection + '/' + docId)
                 .set(data)
                 .catch((err) => {
                     console.error('❌ Error saving to cloud:', err);
+                    return Promise.reject(err);
+                });
+        }
+
+        // ===== دالة حفظ النص في Firebase (جديدة) =====
+        function saveTextToCloud(docId, data) {
+            if (!firebaseReady || !db || !currentUser || !navigator.onLine) {
+                return Promise.reject('offline');
+            }
+            return db.ref('texts/' + docId)
+                .set(data)
+                .catch((err) => {
+                    console.error('❌ Error saving text to cloud:', err);
                     return Promise.reject(err);
                 });
         }
@@ -1444,14 +1466,13 @@
                 console.warn('⚠️ Cannot load from cloud - offline or not authenticated');
                 return;
             }
-            
             try {
                 console.log('🔄 Loading data from cloud...');
                 isSyncing = true;
                 
+                // تحميل الطلاب
                 const studentsSnapshot = await db.ref('students').once('value');
                 const studentsData = studentsSnapshot.val();
-                
                 if (studentsData) {
                     const newStudents = [];
                     Object.keys(studentsData).forEach(id => {
@@ -1467,6 +1488,23 @@
                     appData.students = newStudents;
                 }
                 
+                // تحميل النصوص (جديد)
+                const textsSnapshot = await db.ref('texts').once('value');
+                const textsData = textsSnapshot.val();
+                if (textsData) {
+                    const newTexts = [];
+                    Object.keys(textsData).forEach(id => {
+                        const data = textsData[id];
+                        if (data && data.title && data.body) {
+                            newTexts.push({
+                                id: id,
+                                ...data
+                            });
+                        }
+                    });
+                    appData.texts = newTexts;
+                }
+                
                 await loadReportsFromCloud();
                 
                 localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
@@ -1475,6 +1513,8 @@
                 renderBulbsForCurrentClass();
                 renderManageView();
                 loadFilteredStudents();
+                renderTextsTable();
+                updateEvalTextDropdown();
                 updateHomeStats();
                 updateSyncStatus(true);
                 
@@ -1493,18 +1533,15 @@
                 alert('⚠️ لا يوجد اتصال بالسحابة. تأكد من اتصالك بالإنترنت.');
                 return;
             }
-            
             if (!currentUser) {
                 alert('⚠️ جاري المصادقة مع السحابة... انتظر قليلاً ثم حاول مرة أخرى.');
                 signInAnonymously();
                 return;
             }
-            
-            if (appData.students.length === 0 && appData.reports.length === 0) {
+            if (appData.students.length === 0 && appData.reports.length === 0 && appData.texts.length === 0) {
                 alert('⚠️ لا توجد بيانات لحفظها');
                 return;
             }
-            
             isSyncing = true;
             const promises = [];
             let savedCount = 0;
@@ -1523,6 +1560,22 @@
                     saveToCloud('students', s.id, d)
                         .then(() => { savedCount++; })
                         .catch((err) => console.error('❌ Failed to save student:', s.name, err))
+                );
+            });
+            
+            appData.texts.forEach(t => {
+                if (!t.title || !t.body) return;
+                const d = {
+                    title: t.title,
+                    grade: t.grade || '',
+                    skills: t.skills || '',
+                    body: t.body,
+                    updatedAt: new Date().toISOString()
+                };
+                promises.push(
+                    saveTextToCloud(t.id, d)
+                        .then(() => { savedCount++; })
+                        .catch((err) => console.error('❌ Failed to save text:', t.title, err))
                 );
             });
             
@@ -1553,9 +1606,7 @@
             localStorage.setItem('reading_platform_full_data_v16', JSON.stringify(appData));
         }
 
-        // === دالة saveAppData معدلة لتصبح غير متزامنة ===
         async function saveAppData() {
-            // حفظ محلياً (كاحتياطي)
             saveAppDataLocally();
             if (firebaseReady && db && navigator.onLine && currentUser) {
                 isSyncing = true;
@@ -1570,15 +1621,21 @@
                         hasRead: s.hasRead || false,
                         updatedAt: new Date().toISOString()
                     };
-                    promises.push(saveToCloud('students', s.id, d).catch(err => {
-                        console.error('❌ فشل حفظ الطالب:', s.name, err);
-                        // لا نرمي الخطأ لاستمرار العملية
-                    }));
+                    promises.push(saveToCloud('students', s.id, d).catch(err => console.error('❌ فشل حفظ الطالب:', s.name, err)));
+                });
+                appData.texts.forEach(t => {
+                    if (!t.title || !t.body) return;
+                    const d = {
+                        title: t.title,
+                        grade: t.grade || '',
+                        skills: t.skills || '',
+                        body: t.body,
+                        updatedAt: new Date().toISOString()
+                    };
+                    promises.push(saveTextToCloud(t.id, d).catch(err => console.error('❌ فشل حفظ النص:', t.title, err)));
                 });
                 appData.reports.forEach(r => {
-                    promises.push(saveReportToCloud(r).catch(err => {
-                        console.error('❌ فشل حفظ التقرير:', r.id, err);
-                    }));
+                    promises.push(saveReportToCloud(r).catch(err => console.error('❌ فشل حفظ التقرير:', r.id, err)));
                 });
                 await Promise.all(promises);
                 isSyncing = false;
@@ -1586,7 +1643,6 @@
             } else {
                 console.warn('⚠️ لا يمكن الحفظ في السحابة (غير متصل أو غير مصادق)');
             }
-            // تحديث الواجهة بعد الحفظ
             updateHomeStats();
             renderStudentsTable();
             renderClassesTable();
@@ -1596,24 +1652,18 @@
             renderManageView();
             loadFilteredStudents();
             renderSupportList();
+            updateEvalTextDropdown();
         }
 
         function loadAppData() {
-            // إذا كان Firebase جاهزاً، سنعتمد على بيانات السحابة، ولا نقرأ من localStorage إلا كنسخة احتياطية
             if (firebaseReady && db && navigator.onLine && currentUser) {
-                // لا نقرأ من localStorage، بل ننتظر تحميل السحابة (المنفذ في onAuthStateChanged)
                 console.log('⏳ سيتم تحميل البيانات من السحابة...');
-                // لكن قد تكون هناك بيانات محلية مؤقتة، نتركها كما هي حتى يأتي تحديث من Firebase
-                // سيتم تحديث appData عبر المستمعين.
-                // إذا لم تكن البيانات محملة بعد، نستدعي loadFromCloud (لكنها قد تستدعى من onAuthStateChanged)
                 if (!window._cloudLoaded) {
                     window._cloudLoaded = true;
                     loadFromCloud();
                 }
                 return;
             }
-
-            // في حالة عدم وجود اتصال، نقرأ من localStorage
             const saved = localStorage.getItem('reading_platform_full_data_v16');
             if (saved) {
                 try { appData = JSON.parse(saved); } catch (e) {}
@@ -1636,6 +1686,7 @@
             renderManageView();
             loadFilteredStudents();
             renderSupportList();
+            updateEvalTextDropdown();
         }
 
         function switchTab(tabId) {
@@ -1665,6 +1716,7 @@
             if (tabId === 'reports') renderAllReportsTable();
             if (tabId === 'students') loadFilteredStudents();
             if (tabId === 'support') renderSupportList();
+            if (tabId === 'texts') renderTextsTable();
         }
 
         function updateHomeStats() {
@@ -1751,7 +1803,6 @@
             alert('تم الحذف');
         }
 
-        // === دالة addNewStudent معدلة لتصبح غير متزامنة ===
         async function addNewStudent() {
             const name = document.getElementById('new-student-name').value.trim();
             const grade = document.getElementById('new-student-grade').value;
@@ -1763,7 +1814,7 @@
                 alert('الطالب موجود'); return;
             }
             appData.students.push({ id: 's_' + Date.now() + Math.random(), name, grade, className, code, hasRead: false });
-            await saveAppData(); // انتظار الحفظ
+            await saveAppData();
             renderStudentsTable();
             renderBulbsForCurrentClass();
             renderManageView();
@@ -1782,7 +1833,6 @@
             }).join('');
         }
 
-        // === دالة deleteStudent معدلة لتصبح غير متزامنة ===
         async function deleteStudent(id) {
             if (!confirm('حذف الطالب؟')) return;
             const student = appData.students.find(s => s.id === id);
@@ -1798,7 +1848,6 @@
             loadFilteredStudents();
         }
 
-        // === دالة deleteAllStudents معدلة لتصبح غير متزامنة ===
         async function deleteAllStudents() {
             if (appData.students.length === 0) { alert('لا يوجد طلاب'); return; }
             if (!confirm('حذف جميع الطلاب؟')) return;
@@ -1838,7 +1887,7 @@
         }
 
         // ================================================================
-        // 5. IMPORT EXCEL — معدلة بالكامل لإصلاح مشكلة التجمد
+        // 5. IMPORT EXCEL — معدلة لإصلاح مشكلة التجمد
         // ================================================================
         let importedExcelData = [];
 
@@ -1850,12 +1899,9 @@
                 return;
             }
             console.log('📌 فتح نافذة استيراد للصف:', grade, 'الفصل:', className);
-
-            // إعادة تعيين الحالة
             document.getElementById('excelPreviewContainer').style.display = 'none';
             document.getElementById('excelFileInput').value = '';
             importedExcelData = [];
-
             const modalElement = document.getElementById('importExcelModal');
             if (modalElement) {
                 const modal = new bootstrap.Modal(modalElement);
@@ -1871,13 +1917,10 @@
                 alert('⚠️ لم يتم اختيار ملف.');
                 return;
             }
-
-            // عرض رسالة "جاري القراءة..."
             const previewContainer = document.getElementById('excelPreviewContainer');
             const previewTable = document.getElementById('excelPreviewTable');
             previewContainer.style.display = 'block';
             previewTable.innerHTML = '<div class="text-center text-muted">⏳ جاري قراءة الملف...</div>';
-
             const reader = new FileReader();
             reader.onload = function(e) {
                 try {
@@ -1885,16 +1928,13 @@
                     const workbook = XLSX.read(data, { type: 'array' });
                     const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
                     const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
-
                     if (rows.length < 2) {
                         alert('⚠️ الملف فارغ أو لا يحتوي على بيانات.');
                         previewContainer.style.display = 'none';
                         return;
                     }
-
                     const header = rows[0];
                     let nameIdx = -1, gradeIdx = -1, classIdx = -1, codeIdx = -1;
-
                     header.forEach((cell, idx) => {
                         if (cell) {
                             const str = cell.toString().trim().toLowerCase();
@@ -1904,13 +1944,10 @@
                             else if (str.includes('رقم') || str.includes('كود') || str.includes('code') || str.includes('id')) codeIdx = idx;
                         }
                     });
-
-                    // إذا لم يتم التعرف على الأعمدة، نستخدم ترتيب افتراضي 0,1,2,3
                     if (nameIdx === -1) nameIdx = 0;
                     if (gradeIdx === -1) gradeIdx = 1;
                     if (classIdx === -1) classIdx = 2;
                     if (codeIdx === -1) codeIdx = 3;
-
                     const dataRows = [];
                     for (let i = 1; i < rows.length; i++) {
                         const row = rows[i];
@@ -1922,16 +1959,12 @@
                         const code = row[codeIdx] ? row[codeIdx].toString().trim() : '';
                         dataRows.push({ name, grade, className, code });
                     }
-
                     if (dataRows.length === 0) {
                         alert('⚠️ لم يتم العثور على بيانات صالحة في الملف. تأكد من وجود أعمدة: الاسم، الصف، الفصل، الكود.');
                         previewContainer.style.display = 'none';
                         return;
                     }
-
                     importedExcelData = dataRows;
-
-                    // عرض المعاينة
                     let html = `<table class="table table-bordered table-striped table-sm">
                         <thead><tr><th>#</th><th>اسم الطالب</th><th>الصف</th><th>الفصل</th><th>رقم الطالب</th></tr></thead><tbody>`;
                     dataRows.forEach((row, idx) => {
@@ -1940,21 +1973,17 @@
                     html += `</tbody></table>`;
                     previewTable.innerHTML = html;
                     previewContainer.style.display = 'block';
-
                     alert(`✅ تم قراءة ${dataRows.length} طالب بنجاح. اضغط "استيراد الطلاب" لإضافتهم.`);
-
                 } catch (err) {
                     console.error('❌ خطأ في قراءة الملف:', err);
                     alert('❌ حدث خطأ أثناء قراءة الملف: ' + err.message);
                     previewContainer.style.display = 'none';
                 }
             };
-
             reader.onerror = function() {
                 alert('❌ حدث خطأ في قراءة الملف.');
                 previewContainer.style.display = 'none';
             };
-
             reader.readAsArrayBuffer(file);
         }
 
@@ -1964,29 +1993,23 @@
             importedExcelData = [];
         }
 
-        // === دالة confirmImportExcel معدلة لتصبح غير متزامنة مع رسائل حالة ===
         async function confirmImportExcel() {
             if (importedExcelData.length === 0) {
                 alert('⚠️ لا توجد بيانات للاستيراد. قم بتحميل ملف أولاً.');
                 return;
             }
-
             const selectedGrade = document.getElementById('filter-grade-select').value;
             const selectedClass = document.getElementById('filter-class-select').value;
             if (!selectedGrade || !selectedClass) {
                 alert('⚠️ يرجى اختيار الصف والفصل المستهدفين قبل الاستيراد.');
                 return;
             }
-
             let added = 0, updated = 0, skipped = 0;
-
-            // تعطيل الزر وإظهار رسالة "جاري الحفظ..."
             const confirmBtn = document.querySelector('#importExcelModal .btn-success');
             if (confirmBtn) {
                 confirmBtn.disabled = true;
                 confirmBtn.textContent = '⏳ جاري الحفظ...';
             }
-
             try {
                 importedExcelData.forEach(row => {
                     let grade = row.grade || selectedGrade;
@@ -2012,20 +2035,14 @@
                         added++;
                     }
                 });
-
-                await saveAppData(); // انتظار الحفظ في Firebase
-
+                await saveAppData();
                 renderStudentsTable();
                 renderBulbsForCurrentClass();
                 renderManageView();
                 loadFilteredStudents();
-
-                // إغلاق المودال وتنظيف المعاينة
                 bootstrap.Modal.getInstance(document.getElementById('importExcelModal')).hide();
                 clearExcelPreview();
-
                 alert(`✅ تم الاستيراد بنجاح: ${added} طالب جديد، ${updated} تحديث، ${skipped} تخطي.`);
-
             } catch (err) {
                 console.error('❌ خطأ أثناء حفظ البيانات:', err);
                 alert('❌ حدث خطأ أثناء حفظ الطلاب: ' + err.message);
@@ -2084,16 +2101,17 @@
         });
 
         // ================================================================
-        // 7. TEXTS — محفوظة
+        // 7. TEXTS — معدلة للتخزين في Firebase
         // ================================================================
-        function addNewReadingText() {
+        async function addNewReadingText() {
             const title = document.getElementById('text-title').value.trim();
             const grade = document.getElementById('text-grade').value;
             const skills = document.getElementById('text-skills').value.trim();
             const body = document.getElementById('text-body').value.trim();
             if (!title || !body) { alert('أدخل العنوان والمحتوى'); return; }
-            appData.texts.push({ id: 't_' + Date.now(), title, grade, skills, body });
-            saveAppData();
+            const newText = { id: 't_' + Date.now(), title, grade, skills, body };
+            appData.texts.push(newText);
+            await saveAppData();
             renderTextsTable();
             document.getElementById('text-title').value = '';
             document.getElementById('text-skills').value = '';
@@ -2104,15 +2122,26 @@
         function renderTextsTable() {
             const tbody = document.getElementById('texts-table-body');
             if (!tbody) return;
+            if (appData.texts.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-muted">لا توجد نصوص محفوظة</td></tr>';
+                return;
+            }
             tbody.innerHTML = appData.texts.map(t =>
                 `<tr><td class="fw-bold text-primary">${t.title}</td><td>${t.grade}</td><td>${t.skills || '—'}</td><td class="text-truncate" style="max-width:250px;">${t.body}</td><td><button class="btn btn-danger btn-sm" onclick="deleteText('${t.id}')">حذف</button></td></tr>`
-                ).join('');
+            ).join('');
             updateEvalTextDropdown();
         }
 
-        function deleteText(id) { appData.texts = appData.texts.filter(t => t.id !== id);
-            saveAppData();
-            renderTextsTable(); }
+        async function deleteText(id) {
+            if (!confirm('حذف النص؟')) return;
+            appData.texts = appData.texts.filter(t => t.id !== id);
+            await saveAppData();
+            if (firebaseReady && db && navigator.onLine) {
+                db.ref('texts/' + id).remove().catch(() => {});
+            }
+            renderTextsTable();
+            updateEvalTextDropdown();
+        }
 
         // ================================================================
         // 8. EVAL UI — محفوظة
@@ -2335,7 +2364,7 @@
                     restartAttempts: 0,
                     maxRestartAttempts: 3,
                     lastAddedText: '',
-                    addedWords: new Set() // جديد: لتتبع الكلمات المضافة
+                    addedWords: new Set()
                 };
                 console.log('📌 تم إنشاء جلسة جديدة:', this.sessionId);
                 return this.currentSession;
@@ -2390,7 +2419,6 @@
                 return this.currentSession && this.currentSession.processedIndices.has(index);
             }
 
-            // ===== الدالة المعدلة بالكامل لمنع التكرار =====
             addFinalText(text) {
                 if (!this.currentSession) return false;
                 if (!text || text.trim().length === 0) return false;
@@ -2400,33 +2428,25 @@
                 const lastAdded = this.currentSession.lastAddedText;
                 const addedWords = this.currentSession.addedWords;
 
-                // 1. منع التكرار التام - إذا كان النص موجوداً بالفعل
                 if (currentText.includes(cleanText)) {
                     console.log('⏭️ تجاهل نص مكرر (موجود بالفعل):', cleanText);
                     return false;
                 }
-
-                // 2. منع إضافة نفس النص مرتين متتاليتين
                 if (lastAdded === cleanText) {
                     console.log('⏭️ تجاهل نص مكرر (مطابق لآخر نص):', cleanText);
                     return false;
                 }
-
-                // 3. منع إضافة نص أقصر من النص السابق إذا كان يحتويه
                 if (lastAdded && lastAdded.includes(cleanText) && cleanText.length < lastAdded.length) {
                     console.log('⏭️ تجاهل نص أقصر من النص السابق:', cleanText);
                     return false;
                 }
 
-                // 4. منع إضافة كلمات مكررة داخل النص الجديد نفسه
                 const words = cleanText.split(/\s+/);
                 const uniqueWords = [];
                 let prevWord = '';
                 let hasInternalDuplicate = false;
-                
                 for (let i = 0; i < words.length; i++) {
                     const currentWord = words[i];
-                    // إذا كانت الكلمة مكررة داخلياً (مثل: ذهب ذهب)
                     if (currentWord !== prevWord) {
                         uniqueWords.push(currentWord);
                         prevWord = currentWord;
@@ -2434,20 +2454,15 @@
                         hasInternalDuplicate = true;
                     }
                 }
-                
-                // استخدام النص المنظف من التكرارات الداخلية
                 const dedupText = uniqueWords.join(' ');
                 const finalText = (hasInternalDuplicate || dedupText !== cleanText) ? dedupText : cleanText;
 
-                // 5. التحقق من عدم وجود كلمات مكررة في النص النهائي
                 const finalWords = finalText.split(/\s+/);
                 let cleanFinalWords = [];
                 let seenWords = new Set();
                 let hasDuplicateWord = false;
-                
                 for (let i = 0; i < finalWords.length; i++) {
                     const word = finalWords[i];
-                    // إذا كانت الكلمة ظهرت من قبل في هذه الجلسة
                     if (addedWords.has(word)) {
                         hasDuplicateWord = true;
                         console.log('⏭️ تجاهل كلمة مكررة:', word);
@@ -2456,27 +2471,19 @@
                     cleanFinalWords.push(word);
                     seenWords.add(word);
                 }
-                
-                // إذا لم يتبقى كلمات بعد التصفية
                 if (cleanFinalWords.length === 0) {
                     console.log('⏭️ جميع الكلمات مكررة، تم تجاهل النص');
                     return false;
                 }
-                
                 const finalCleanText = cleanFinalWords.join(' ');
-                
-                // 6. إضافة النص النهائي
                 if (currentText.length > 0) {
                     this.currentSession.finalTranscript += ' ' + finalCleanText;
                 } else {
                     this.currentSession.finalTranscript = finalCleanText;
                 }
-                
-                // 7. تسجيل الكلمات المضافة
                 cleanFinalWords.forEach(word => {
                     addedWords.add(word);
                 });
-                
                 this.currentSession.lastAddedText = finalCleanText;
                 this.currentSession.hasFinalResult = true;
                 console.log('✅ تم إضافة نص جديد:', finalCleanText);
@@ -2742,7 +2749,6 @@
             }
         }
 
-        // ===== دالة startReadingSession المعدلة =====
         async function startReadingSession() {
             const studentId = document.getElementById('eval-student-select').value;
             const textId = document.getElementById('eval-text-select').value;
@@ -2952,24 +2958,18 @@
                     const filteredInterim = filterInvalidTranscript(interimText);
 
                     if (filteredFinal && filteredFinal.trim().length > 0) {
-                        // تنظيف النص من التكرارات المتتالية
                         let cleanFinal = cleanRepeatedText(filteredFinal.trim());
-                        
-                        // تقسيم النص إلى كلمات وإزالة التكرارات الداخلية
                         let words = cleanFinal.split(/\s+/);
                         let uniqueWords = [];
                         let seen = new Set();
                         for (let i = 0; i < words.length; i++) {
                             const word = words[i];
-                            // نسمح بتكرار الكلمات إذا كانت مختلفة أو متباعدة
                             if (!seen.has(word) || (i > 0 && words[i-1] === word)) {
                                 uniqueWords.push(word);
                                 seen.add(word);
                             }
                         }
                         cleanFinal = uniqueWords.join(' ');
-                        
-                        // إضافة النص المنظف
                         const added = sessionManager.addFinalText(cleanFinal);
                         if (added) {
                             const fullText = sessionManager.getFinalTranscript();
@@ -3264,7 +3264,6 @@
             checkMicOnLoad();
         }, 1000);
 
-        // ===== دالة processAndGenerateReport - مع الحفظ في السحابة =====
         function processAndGenerateReport() {
             try {
                 const session = sessionManager.getSession();
@@ -4014,7 +4013,6 @@
             `).join('');
         }
 
-        // ===== حذف تقرير واحد =====
         async function deleteReport(reportId) {
             if (!confirm('⚠️ هل أنت متأكد من حذف هذا التقرير؟')) return;
             try {
@@ -4032,7 +4030,6 @@
             }
         }
 
-        // ===== حذف جميع التقارير =====
         async function deleteAllReports() {
             if (appData.reports.length === 0) {
                 alert('📭 لا توجد تقارير لحذفها');
